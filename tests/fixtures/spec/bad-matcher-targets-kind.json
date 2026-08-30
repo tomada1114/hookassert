@@ -1,0 +1,162 @@
+{
+  "specVersion": "1",
+  "claudeCodeRange": ">=2.1.251 <2.2.0",
+  "defaults": {
+    "hookTimeoutMs": 600000,
+    "promptHookTimeoutMs": 30000,
+    "agentHookTimeoutMs": 60000,
+    "reducedTimeoutMs": {
+      "UserPromptSubmit": 30000,
+      "PreModelSwitch": 30000,
+      "PostModelSwitch": 30000,
+      "MessageDisplay": 10000,
+      "SessionEnd": 1500
+    }
+  },
+  "hookEnv": {
+    "provided": [
+      "CLAUDE_PROJECT_DIR",
+      "CLAUDE_PLUGIN_ROOT",
+      "CLAUDE_PLUGIN_DATA",
+      "CLAUDE_CODE_REMOTE",
+      "CLAUDE_CODE_BRIDGE_SESSION_ID",
+      "CLAUDE_EFFORT"
+    ]
+  },
+  "matcherSyntax": {
+    "caseSensitive": true,
+    "exactListPattern": "^[A-Za-z0-9_\\- ,|]+$",
+    "narrowExactMatchEvents": [
+      "FileChanged",
+      "StopFailure"
+    ],
+    "narrowExactListPattern": "^[A-Za-z0-9_|]+$",
+    "rules": [
+      {
+        "id": "comma-separated-list",
+        "sinceVersion": "2.1.191"
+      },
+      {
+        "id": "hyphen-exact-match",
+        "sinceVersion": "2.1.195"
+      }
+    ]
+  },
+  "knownTools": [
+    "Bash",
+    "PowerShell",
+    "Edit",
+    "Write",
+    "Read",
+    "Glob",
+    "Grep",
+    "WebFetch",
+    "WebSearch",
+    "Agent",
+    "Workflow",
+    "AskUserQuestion",
+    "ExitPlanMode",
+    "NotebookEdit"
+  ],
+  "events": {
+    "SessionStart": {
+      "matcherTargets": {
+        "kind": "enum",
+        "field": "source",
+        "values": [
+          "startup",
+          "resume",
+          "clear",
+          "compact",
+          "fork"
+        ]
+      },
+      "blockable": false,
+      "honorsExit2": false,
+      "jsonDecisions": [],
+      "exitCodeEffects": [
+        {
+          "exitCode": 2,
+          "effect": "non-blocking-error",
+          "stderrTo": "user"
+        },
+        {
+          "exitCode": 1,
+          "effect": "non-blocking-error",
+          "stderrTo": "user"
+        }
+      ],
+      "payloadShape": {
+        "verified": false,
+        "requiredKeys": [
+          "session_id",
+          "cwd",
+          "hook_event_name",
+          "transcript_path",
+          "source"
+        ]
+      }
+    },
+    "PreToolUse": {
+      "matcherTargets": {
+        "kind": "bogus"
+      },
+      "blockable": true,
+      "honorsExit2": true,
+      "jsonDecisions": [
+        "allow",
+        "deny",
+        "ask",
+        "defer"
+      ],
+      "exitCodeEffects": [
+        {
+          "exitCode": 2,
+          "effect": "block",
+          "stderrTo": "claude"
+        },
+        {
+          "exitCode": 1,
+          "effect": "non-blocking-error",
+          "stderrTo": "user"
+        }
+      ],
+      "payloadShape": {
+        "verified": false,
+        "requiredKeys": [
+          "session_id",
+          "cwd",
+          "hook_event_name",
+          "tool_name",
+          "tool_input",
+          "tool_use_id"
+        ]
+      }
+    }
+  },
+  "matcherTable": [
+    {
+      "event": "PreToolUse",
+      "matcher": "Bash",
+      "matches": [
+        "Bash"
+      ],
+      "doesNotMatch": [
+        "PowerShell"
+      ],
+      "sinceVersion": null
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "Edit|Write",
+      "matches": [
+        "Edit",
+        "Write"
+      ],
+      "doesNotMatch": [
+        "NotebookEdit"
+      ],
+      "sinceVersion": null
+    }
+  ]
+}

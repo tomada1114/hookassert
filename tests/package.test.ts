@@ -31,6 +31,7 @@ import {
   readTarEntries,
   requiredEntryPaths,
   resolveTarballArgument as resolveCheckPackageTarballArgument,
+  satisfiesRequiredPath,
 } from "../scripts/check-package.mjs";
 import { findSingleTarball } from "../scripts/lib/tarball.mjs";
 import { checkTarballContents } from "../scripts/smoke-package.mjs";
@@ -293,10 +294,35 @@ describe("inspectPackageEntries", () => {
     );
   });
 
-  it("rejects JSON files outside dist/", () => {
-    expect(codesOf(inspectPackageEntries([entry("spec/x.json")], {}))).toContain(
+  it("rejects JSON files outside dist/, schema/ and spec/", () => {
+    expect(codesOf(inspectPackageEntries([entry("other/x.json")], {}))).toContain(
       "ERR_PACKAGE_PATH_NOT_ALLOWED",
     );
+  });
+
+  it("accepts a JSON file directly under schema/ or spec/", () => {
+    expect(inspectPackageEntries([entry("schema/spec.schema.json")], {})).toEqual([]);
+    expect(
+      inspectPackageEntries([entry("spec/claude-code-2.1.251-2.2.0.json")], {}),
+    ).toEqual([]);
+  });
+
+  it("rejects a non-JSON file under schema/ or spec/", () => {
+    expect(
+      codesOf(inspectPackageEntries([entry("schema/spec.schema.txt")], {})),
+    ).toContain("ERR_PACKAGE_PATH_NOT_ALLOWED");
+    expect(codesOf(inspectPackageEntries([entry("spec/readme.md")], {}))).toContain(
+      "ERR_PACKAGE_PATH_NOT_ALLOWED",
+    );
+  });
+
+  it("rejects a nested subdirectory under schema/ or spec/", () => {
+    expect(
+      codesOf(inspectPackageEntries([entry("schema/nested/spec.schema.json")], {})),
+    ).toContain("ERR_PACKAGE_PATH_NOT_ALLOWED");
+    expect(
+      codesOf(inspectPackageEntries([entry("spec/nested/claude-code.json")], {})),
+    ).toContain("ERR_PACKAGE_PATH_NOT_ALLOWED");
   });
 
   it.each([
@@ -466,6 +492,25 @@ describe("inspectPackageEntries", () => {
     expect(problems[0]?.path).toBe("dist/index.d.ts");
   });
 
+  it("treats a wildcard exports pattern as satisfied by any matching entry", () => {
+    const manifest = { exports: { "./schema/*.json": "./schema/*.json" } };
+
+    expect(
+      inspectPackageEntries([entry("schema/spec.schema.json")], { manifest }),
+    ).toEqual([]);
+  });
+
+  it("reports a wildcard exports pattern with no matching entry as missing", () => {
+    const problems = inspectPackageEntries([entry("dist/index.js")], {
+      manifest: { exports: { "./schema/*.json": "./schema/*.json" } },
+    });
+
+    expect(codesOf(problems)).toContain("ERR_PACKAGE_ENTRY_MISSING");
+    expect(problems.find((p) => p.code === "ERR_PACKAGE_ENTRY_MISSING")?.path).toBe(
+      "schema/*.json",
+    );
+  });
+
   it("exposes the deliberately reviewable package limits", () => {
     expect(PACKAGE_LIMITS).toEqual({
       maxUnpackedBytes: 1024 * 1024,
@@ -560,7 +605,40 @@ describe("requiredEntryPaths", () => {
       // The conventional `"./package.json": "./package.json"` subpath, which
       // tooling reads and which therefore has to be in the tarball too.
       "package.json",
+      // Wildcard subpath exports for the versioned hooks spec's schema and
+      // its spec/ JSON files, collected as the raw pattern rather than a
+      // literal path — see satisfiesRequiredPath for how a wildcard leaf is
+      // checked against the tarball's actual entries.
+      "schema/*.json",
+      "spec/*.json",
     ]);
+  });
+});
+
+// --- satisfiesRequiredPath ---------------------------------------------------
+
+describe("satisfiesRequiredPath", () => {
+  it("compares a literal requirement for exact equality", () => {
+    expect(satisfiesRequiredPath("dist/index.js", "dist/index.js")).toBe(true);
+    expect(satisfiesRequiredPath("dist/index.d.ts", "dist/index.js")).toBe(false);
+  });
+
+  it("matches a wildcard requirement against a satisfying entry", () => {
+    expect(satisfiesRequiredPath("schema/spec.schema.json", "schema/*.json")).toBe(
+      true,
+    );
+    expect(
+      satisfiesRequiredPath("spec/claude-code-2.1.251-2.2.0.json", "spec/*.json"),
+    ).toBe(true);
+  });
+
+  it("rejects an entry outside the wildcard's own directory or extension", () => {
+    expect(satisfiesRequiredPath("schema/spec.schema.txt", "schema/*.json")).toBe(
+      false,
+    );
+    expect(satisfiesRequiredPath("other/spec.schema.json", "schema/*.json")).toBe(
+      false,
+    );
   });
 });
 
