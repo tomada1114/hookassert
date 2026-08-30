@@ -1,21 +1,21 @@
 {
-  "name": "my-package",
-  "version": "0.1.1",
-  "description": "A short description.",
+  "name": "hookassert",
+  "version": "0.0.0",
+  "description": "Test your Claude Code hooks like code: replay tool events against your merged settings, run the matching hooks, and fail CI when one doesn't fire or doesn't block.",
   "keywords": [],
   "license": "MIT",
-  "author": "Your Name <you@example.com>",
+  "author": "tomada <tmasuyama1114@gmail.com>",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/your-name/my-package.git"
+    "url": "git+https://github.com/tomada1114/hookassert.git"
   },
   "bugs": {
-    "url": "https://github.com/your-name/my-package/issues"
+    "url": "https://github.com/tomada1114/hookassert/issues"
   },
-  "homepage": "https://github.com/your-name/my-package#readme",
+  "homepage": "https://github.com/tomada1114/hookassert#readme",
   "type": "module",
   "engines": {
-    "node": ">=24"
+    "node": ">=20"
   },
   "packageManager": "pnpm@11.18.0",
   "devEngines": {
@@ -71,8 +71,7 @@
     "check:source": "pnpm run format:check && pnpm run lint && pnpm run typecheck && pnpm run test:coverage && pnpm run build && pnpm run docs:build",
     "check": "pnpm run check:source && node scripts/clean.mjs .package && pnpm pack --pack-destination .package && pnpm run package:verify -- --pack-dir .package && node scripts/clean.mjs .package",
     "fix": "eslint . --fix && prettier --write .",
-    "hooks:install": "lefthook install",
-    "bootstrap:e2e": "node scripts/verify-bootstrap.mjs"
+    "hooks:install": "lefthook install"
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.5",
@@ -89,5 +88,8 @@
     "typescript": "~6.0.3",
     "typescript-eslint": "^8.67.0",
     "vitest": "^4.1.11"
+  },
+  "bin": {
+    "hookassert": "./dist/cli.js"
   }
 }

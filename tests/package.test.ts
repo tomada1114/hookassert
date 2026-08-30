@@ -550,7 +550,7 @@ describe("requiredEntryPaths", () => {
     // without building its file is caught. Hard-coding the list here would
     // reintroduce exactly the duplication spec 01 §1.3 forbids.
     expect(requiredEntryPaths(manifest)).toEqual([
-      ...(hasBin ? ["dist/bin.js"] : []),
+      ...(hasBin ? ["dist/cli.js"] : []),
       "dist/index.d.ts",
       "dist/index.js",
       // The conventional `"./package.json": "./package.json"` subpath, which

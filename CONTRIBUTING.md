@@ -19,37 +19,6 @@ override only for the minimum-Node compatibility check below.
 Useful focused commands are `pnpm check:quick`, `pnpm test`, `pnpm test:coverage`,
 `pnpm build`, `pnpm docs:build`, and `pnpm package:smoke`.
 
-<!-- template-only:start -->
-
-## Bootstrap profiles
-
-The template starts as the `node-library` profile. Bootstrap makes one irreversible
-choice for the generated repository:
-
-| Profile             | Runtime contract                                   | `sideEffects` |
-| ------------------- | -------------------------------------------------- | ------------- |
-| `node-library`      | The `--node-engines` range (default `>=24`)        | `false`       |
-| `universal-library` | ES and DOM APIs; Node built-ins fail the src build | `false`       |
-
-The universal profile omits `engines.node`, sets build `types` to an empty array, and is
-exercised by the bundler-resolution smoke consumer. The node-library profile retains
-Node types.
-
-## Minimum-Node compatibility
-
-Bootstrap's `--node-engines` range is the published contract for a `node-library`; the
-default is `>=24`. Its generated `package-floor` CI job builds and packs on Node 24,
-then switches to the selected floor and runs only the consumer check:
-
-```sh
-pnpm --config.runtime-on-fail=ignore run package:smoke -- --pack-dir .smoke
-```
-
-The override is deliberately scoped to this artifact-consumption step. Do not use it for
-source installation, linting, type checking, tests, or builds, and do not weaken
-`devEngines.runtime`.
-<!-- template-only:end -->
-
 ## Dependency cooldown
 
 The seven-day dependency cooldown in `pnpm-workspace.yaml` is fail-closed. If an urgent
@@ -86,7 +55,7 @@ package onto the registry a different way before trusted publishing can take ove
    to. A 404 from the command below means nobody has published it yet:
 
    ```sh
-   npm view my-package
+   npm view hookassert
    ```
 
 2. Create the `release` GitHub Environment — the name `release.yml`'s
@@ -113,7 +82,7 @@ Releases are driven by a reviewed release PR and an annotated `vX.Y.Z` tag match
 npm already contains the version, never publish that version again — verify it first:
 
 ```sh
-npm view my-package@X.Y.Z version
+npm view hookassert@X.Y.Z version
 ```
 
 Then repair only the GitHub Release by rerunning the release attachment job or uploading
@@ -126,7 +95,7 @@ version:
   still resolves but warns, then ship a patch release with the fix:
 
   ```sh
-  npm deprecate my-package@X.Y.Z "<reason>"
+  npm deprecate hookassert@X.Y.Z "<reason>"
   ```
 
 - **Harmful or leaking** (a real vulnerability, a leaked secret, or actively broken
@@ -134,8 +103,8 @@ version:
   version, file a GitHub Security Advisory, then ship the fix:
 
   ```sh
-  npm dist-tag add my-package@GOOD.X.Y.Z latest
-  npm deprecate my-package@BAD.X.Y.Z "<reason>"
+  npm dist-tag add hookassert@GOOD.X.Y.Z latest
+  npm deprecate hookassert@BAD.X.Y.Z "<reason>"
   ```
 
 - **Unpublish** only inside npm's 72-hour window, and only for a version that should
@@ -155,8 +124,8 @@ prerelease identifier (`rc`, `next`, …) out of the version and:
   plain install still resolves to `latest`:
 
   ```sh
-  npm install my-package@rc
-  npm install my-package
+  npm install hookassert@rc
+  npm install hookassert
   ```
 
 - creates the GitHub Release marked as a pre-release.

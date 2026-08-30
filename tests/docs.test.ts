@@ -65,7 +65,7 @@ function readmeSnippets(): Snippet[] {
 
 function srcFiles(): string[] {
   // src/internal/** is never re-exported from index.ts (see AGENTS.md), so a
-  // symbol documented there is not reachable as `import { x } from "my-package"`.
+  // symbol documented there is not reachable as `import { x } from "hookassert"`.
   // Scanning it anyway would misreport a scope mistake as a docs-content bug.
   const internalPrefix = `internal${path.sep}`;
   return readdirSync(path.join(repoRoot, "src"), { recursive: true })

@@ -151,27 +151,7 @@ jobs:
       # This line is rewritten by bootstrap for a chosen --node-engines >=N.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24 # bootstrap-node-floor
+          node-version: 20
 
       - name: Consume the packed artifact at the published Node floor
         run: pnpm --config.runtime-on-fail=ignore run package:smoke -- --pack-dir .smoke
-
-  # template-only:start
-  bootstrap:
-    name: Bootstrap generated repositories
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version-file: .node-version
-
-      - name: Verify bootstrap transformations
-        run: node scripts/verify-bootstrap.mjs
-  # template-only:end

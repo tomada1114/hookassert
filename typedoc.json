@@ -14,7 +14,7 @@
   // bootstrapped directory that has no remote yet. Source links still resolve
   // wherever git is available, and are simply omitted where it is not.
   "gitRevision": "main",
-  "sourceLinkTemplate": "https://github.com/your-name/my-package/blob/{gitRevision}/{path}#L{line}",
+  "sourceLinkTemplate": "https://github.com/tomada1114/hookassert/blob/{gitRevision}/{path}#L{line}",
 
   "treatWarningsAsErrors": true,
   "validation": {

@@ -1281,14 +1281,13 @@ describe("workflow regression checks for repository automation", () => {
     expect((testJob.match(/run: pnpm run test:coverage/g) ?? []).length).toBe(1);
   });
 
-  it("runs the lightweight bootstrap check in CI", () => {
+  it("keeps the template's bootstrap job out of CI", () => {
+    // Bootstrap removed the flow and its scripts from this repository. A job
+    // naming either would fail on a file that no longer exists, so the
+    // invariant worth checking here is that neither comes back.
     const source = workflowSource("ci.yml");
-    const bootstrapStart = source.indexOf("  bootstrap:");
-    const blockEnd = source.indexOf("# template-only:end", bootstrapStart);
-    const bootstrapJob = source.slice(bootstrapStart, blockEnd);
-    expect(bootstrapJob).toContain("node scripts/verify-bootstrap.mjs");
-    expect(bootstrapJob).not.toContain("pnpm install");
-    expect(bootstrapJob).not.toContain("pnpm run check");
+    expect(source).not.toContain("  bootstrap:");
+    expect(source).not.toContain("scripts/verify-bootstrap.mjs");
     expect(source).not.toContain("pnpm run bootstrap:e2e");
     expect(source.toLowerCase()).not.toContain("change" + "set");
   });
@@ -1314,7 +1313,7 @@ describe("workflow regression checks for repository automation", () => {
     expect(packageFloorStart).toBeGreaterThan(-1);
     const packageFloor = source.slice(packageFloorStart);
 
-    expect(packageFloor).toContain("node-version: 24 # bootstrap-node-floor");
+    expect(packageFloor).toContain("node-version: 20");
     expect(packageFloor).toContain("pnpm run build");
     expect(packageFloor).toContain("pnpm pack --pack-destination .smoke");
     expect(packageFloor).toContain(
@@ -1359,8 +1358,8 @@ describe("the development runtime contract fails closed", () => {
     );
   });
 
-  it("keeps the template's default published floor explicit", () => {
-    expect(manifest.engines?.node).toBe(">=24");
+  it("keeps the published floor explicit and matching the package-floor job", () => {
+    expect(manifest.engines?.node).toBe(">=20");
   });
 });
 
