@@ -27,20 +27,47 @@ import type { RawHook, SettingsSource } from "./types.js";
  * The event names this loader recognizes today.
  *
  * @remarks
- * Mirrors `src/types.ts`'s `EventName` union, which that file's own doc
- * comment already calls "a partial list" pending the versioned spec. A
- * `hooks` key outside this set is not an error here — it is treated as an
- * event Claude Code added after this list was last extended, and silently
- * carries no hooks forward, exactly as it would if the spec module (a later
- * issue) does not yet classify it either.
+ * Mirrors `src/types.ts`'s `EventName` union. A `hooks` key outside this set
+ * is not an error here — it is treated as an event Claude Code added after
+ * this list was last extended, and silently carries no hooks forward, exactly
+ * as it would if the spec module does not yet classify it either. The
+ * `matcher` issue is what wires this loader to `src/internal/spec/` instead
+ * of this hand-kept mirror.
  */
 const KNOWN_EVENT_NAMES: readonly EventName[] = [
+  "SessionStart",
+  "Setup",
+  "InstructionsLoaded",
+  "UserPromptSubmit",
+  "UserPromptExpansion",
+  "MessageDisplay",
   "PreToolUse",
+  "PermissionRequest",
   "PostToolUse",
+  "PostToolUseFailure",
+  "PostToolBatch",
+  "PermissionDenied",
+  "Notification",
+  "SubagentStart",
+  "SubagentStop",
+  "TaskCreated",
+  "TaskCompleted",
   "Stop",
   "StopFailure",
-  "PermissionRequest",
+  "TeammateIdle",
+  "ConfigChange",
+  "CwdChanged",
+  "DirectoryAdded",
   "FileChanged",
+  "WorktreeCreate",
+  "WorktreeRemove",
+  "PreCompact",
+  "PostCompact",
+  "PreModelSwitch",
+  "PostModelSwitch",
+  "SessionEnd",
+  "Elicitation",
+  "ElicitationResult",
 ];
 
 function isEventName(value: string): value is EventName {
