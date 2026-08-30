@@ -11,12 +11,15 @@ import console from "node:console";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { gunzipSync } from "node:zlib";
 
 import { isMain } from "./lib/is-main.mjs";
 import { parseJson, readKey } from "./lib/json.mjs";
 import { findSingleTarball } from "./lib/tarball.mjs";
+
+const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 /**
  * One file recorded in a tarball.
@@ -1132,9 +1135,13 @@ export function resolveTarballArgument(argv) {
  * Run the inspection as a command.
  *
  * @param {readonly string[]} argv - Arguments after the script path.
+ * @param {string} [root] - Repository root whose package.json is compared
+ * against the packed manifest; defaults to this checkout. Overridable so a
+ * test can point the comparison at a fixture package instead of building and
+ * packing this repository itself.
  * @returns {number} Process exit code.
  */
-function main(argv) {
+export function main(argv, root = REPO_ROOT) {
   /** @type {string} */
   let tarballPath;
   try {
@@ -1144,8 +1151,7 @@ function main(argv) {
     return 2;
   }
 
-  const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
-  const manifest = parseJson(readFileSync(path.join(repoRoot, "package.json"), "utf8"));
+  const manifest = parseJson(readFileSync(path.join(root, "package.json"), "utf8"));
 
   /** @type {PackageProblem[]} */
   let problems;

@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import consoleModule from "node:console";
 import {
   existsSync,
   mkdirSync,
@@ -11,7 +12,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
   ALLOWED_PATHS,
@@ -25,8 +26,11 @@ import {
   findMissingRequiredPaths,
   inspectPackageEntries,
   inspectTarball,
+  main as checkPackageMain,
+  parsePackedManifest,
   readTarEntries,
   requiredEntryPaths,
+  resolveTarballArgument as resolveCheckPackageTarballArgument,
 } from "../scripts/check-package.mjs";
 import { findSingleTarball } from "../scripts/lib/tarball.mjs";
 import { checkTarballContents } from "../scripts/smoke-package.mjs";
@@ -611,6 +615,12 @@ describe("findAbsoluteMapSources", () => {
 
 // --- findMissingRequiredPaths ------------------------------------------------
 
+describe("parsePackedManifest", () => {
+  it("returns undefined when the tarball has no package.json entry at all", () => {
+    expect(parsePackedManifest([])).toBeUndefined();
+  });
+});
+
 describe("findMissingRequiredPaths", () => {
   it("accepts a tarball carrying the manifest, a readme and a license", () => {
     expect(
@@ -777,6 +787,24 @@ describe("findDanglingMapSources", () => {
       findDanglingMapSources([
         mapEntry("dist/index.js", { sources: ["../src/index.ts"] }),
         entry("dist/index.js.map"),
+      ]),
+    ).toEqual([]);
+  });
+
+  it("ignores a map whose contents do not parse as JSON", () => {
+    // findAbsoluteMapSources is what reports an unparsable map as a leak;
+    // nothing further can be said about it here.
+    expect(
+      findDanglingMapSources([
+        entry("dist/index.js.map", 0, { data: Buffer.from("not json", "utf8") }),
+      ]),
+    ).toEqual([]);
+  });
+
+  it("ignores a map whose sources field is not an array", () => {
+    expect(
+      findDanglingMapSources([
+        mapEntry("dist/index.js.map", { version: 3, sources: "not-an-array" }),
       ]),
     ).toEqual([]);
   });
@@ -1018,6 +1046,33 @@ describe("inspectTarball verifies the manifest actually packed", () => {
     expect(codesOf(problems)).not.toContain("ERR_PACKAGE_MANIFEST_MISMATCH");
   });
 
+  it("fails with ERR_PACKAGE_MAP_ABSOLUTE_PATH when a source map leaks a build machine's path", () => {
+    const file = path.join(workspace, "absolute-map-source.tgz");
+    writeFileSync(
+      file,
+      tarball([
+        ...tarFile("package/package.json", JSON.stringify(repositoryManifest)),
+        ...tarFile("package/README.md", "# fixture\n"),
+        ...tarFile("package/LICENSE", "MIT\n"),
+        ...tarFile("package/dist/index.js", "export const a = 1;\n"),
+        ...tarFile("package/dist/index.d.ts", "export declare const a: 1;\n"),
+        ...tarFile(
+          "package/dist/index.js.map",
+          JSON.stringify({
+            version: 3,
+            sourceRoot: "/Users/whoever/hookassert/src",
+            sources: ["index.ts"],
+            mappings: "",
+          }),
+        ),
+      ]),
+    );
+
+    const problems = inspectTarball(file, repositoryManifest);
+
+    expect(codesOf(problems)).toContain("ERR_PACKAGE_MAP_ABSOLUTE_PATH");
+  });
+
   it("validates the LAST package.json entry when a tarball declares the path twice", () => {
     // A sequential extractor (what `npm install` uses) writes each entry to
     // disk in archive order, so a second "package.json" header overwrites the
@@ -1166,9 +1221,23 @@ describe("verify-package artifact selection", () => {
     );
   });
 
+  it("resolves the single tarball in a pack directory", () => {
+    const packDir = mkdtempSync(path.join(tmpdir(), "verify-package-pack-"));
+    try {
+      writeFileSync(path.join(packDir, "fixture-2.0.0.tgz"), "");
+
+      expect(resolveTarballArgument(["--pack-dir", packDir])).toBe(
+        path.resolve(path.join(packDir, "fixture-2.0.0.tgz")),
+      );
+    } finally {
+      rmSync(packDir, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     { args: [] },
     { args: ["--tarball"] },
+    { args: ["--tarball", "--pack-dir"] },
     { args: ["--tarball", "one.tgz", "--pack-dir", "pack"] },
     { args: ["--unknown", "one.tgz"] },
   ])("rejects ambiguous or incomplete arguments: $args", ({ args }) => {
@@ -1237,6 +1306,7 @@ describe("a tarball produced by npm pack", () => {
   // available to a child process here, and because this fixture must not depend
   // on the repository having been built: `pnpm check` runs tests before build.
   let workspace: string;
+  let root: string;
   let tarballPath: string;
   const longName = `${"long-file-name".repeat(9)}.js`;
   const manifest = {
@@ -1255,7 +1325,7 @@ describe("a tarball produced by npm pack", () => {
 
   beforeAll(() => {
     workspace = mkdtempSync(path.join(tmpdir(), "package-fixture-"));
-    const root = path.join(workspace, "fixture-package");
+    root = path.join(workspace, "fixture-package");
     mkdirSync(path.join(root, "dist"), { recursive: true });
     writeFileSync(path.join(root, "package.json"), JSON.stringify(manifest, null, 2));
     writeFileSync(path.join(root, "README.md"), "# fixture\n");
@@ -1340,5 +1410,94 @@ describe("a tarball produced by npm pack", () => {
     // manifest carries no install script and matches the repository manifest
     // must still be publishable end to end.
     expect(inspectTarball(tarballPath, manifest)).toEqual([]);
+  });
+
+  describe("main", () => {
+    it("returns 0 and logs that the tarball is publishable when root points at the fixture package", () => {
+      const logSpy = vi.spyOn(consoleModule, "log").mockImplementation(() => undefined);
+
+      expect(checkPackageMain(["--tarball", tarballPath], root)).toBe(0);
+      expect(logSpy).toHaveBeenCalledWith(expect.stringMatching(/is publishable/));
+    });
+
+    it("returns 1 and reports the mismatch when root defaults to this repository", () => {
+      // Without the fixture root override, main compares the fixture's packed
+      // manifest against this repository's own package.json, whose name and
+      // version disagree with the fixture — the rejection path an in-process
+      // test can otherwise only reach by building and packing this repository.
+      const errorSpy = vi
+        .spyOn(consoleModule, "error")
+        .mockImplementation(() => undefined);
+
+      expect(checkPackageMain(["--tarball", tarballPath])).toBe(1);
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringMatching(/problem\(s\) in/));
+    });
+
+    it("returns 2 and reports unusable arguments", () => {
+      const errorSpy = vi
+        .spyOn(consoleModule, "error")
+        .mockImplementation(() => undefined);
+
+      expect(checkPackageMain(["--bogus"])).toBe(2);
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringMatching(/Unknown argument/));
+    });
+
+    it("returns 1 when the tarball itself cannot be read", () => {
+      const errorSpy = vi
+        .spyOn(consoleModule, "error")
+        .mockImplementation(() => undefined);
+      const missingPath = path.join(workspace, "does-not-exist.tgz");
+
+      expect(checkPackageMain(["--tarball", missingPath], root)).toBe(1);
+      expect(errorSpy).toHaveBeenCalled();
+    });
+  });
+});
+
+describe("check-package artifact selection", () => {
+  it("returns an explicit tarball without consulting the pack directory", () => {
+    expect(resolveCheckPackageTarballArgument(["--tarball", "dist/package.tgz"])).toBe(
+      "dist/package.tgz",
+    );
+  });
+
+  it("resolves the single tarball in a pack directory", () => {
+    const packDir = mkdtempSync(path.join(tmpdir(), "check-package-pack-"));
+    try {
+      const tarballPath = path.join(packDir, "fixture-1.0.0.tgz");
+      writeFileSync(tarballPath, "");
+
+      expect(resolveCheckPackageTarballArgument(["--pack-dir", packDir])).toBe(
+        tarballPath,
+      );
+    } finally {
+      rmSync(packDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { args: [], reason: "neither flag given" },
+    {
+      args: ["--tarball", "one.tgz", "--pack-dir", "pack"],
+      reason: "both flags given",
+    },
+  ])("rejects when $reason", ({ args }) => {
+    expect(() => resolveCheckPackageTarballArgument(args)).toThrow(
+      /Pass exactly one of --pack-dir or --tarball/,
+    );
+  });
+
+  it.each([
+    { args: ["--tarball"], flag: "--tarball" },
+    { args: ["--pack-dir"], flag: "--pack-dir" },
+    { args: ["--tarball", "--pack-dir"], flag: "--tarball" },
+  ])("rejects $flag with a missing or flag-shaped value", ({ args }) => {
+    expect(() => resolveCheckPackageTarballArgument(args)).toThrow(/requires a value/);
+  });
+
+  it("rejects an argument that is neither --pack-dir nor --tarball", () => {
+    expect(() => resolveCheckPackageTarballArgument(["--help"])).toThrow(
+      /Unknown argument: --help/,
+    );
   });
 });

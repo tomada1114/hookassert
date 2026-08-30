@@ -19,6 +19,7 @@ const automationTests = [
   "tests/clean.test.ts",
   "tests/docs.test.ts",
   "tests/git-env.test.ts",
+  "tests/is-main.test.ts",
   "tests/labels.test.ts",
   "tests/node-tools.test.ts",
   "tests/package-smoke.test.ts",
@@ -27,6 +28,7 @@ const automationTests = [
   "tests/smoke-package.test.ts",
   "tests/sync-agents.test.ts",
   "tests/sync-labels.test.ts",
+  "tests/tarball.test.ts",
   "tests/tooling-ignores.test.ts",
   "tests/verify-bootstrap.test.ts",
   "tests/verify-package.test.ts",
@@ -102,11 +104,6 @@ export default defineConfig({
         // reach. 90 sits below every one of those numbers with room for a new
         // module to land slightly under its own eventual coverage, and is not a
         // guess: it is the measurement, not a target invented ahead of one.
-        //
-        // scripts/** and scripts/lib/guard/** are deliberately left where they
-        // are; raising them to 90 needs real tests for the automation branches
-        // first, which is its own piece of work rather than a number to change
-        // here.
         "src/**/*.ts": {
           lines: 90,
           functions: 90,
@@ -115,34 +112,51 @@ export default defineConfig({
         },
         // scripts/lib/guard/** is the credential/path-detection rule engine —
         // the most security-critical code in the repository — so it carries a
-        // higher floor than the rest of scripts/**. Measured baseline at the
-        // time this floor was set: 90.9% statements, 82.35% branches, 100%
-        // functions, 90% lines. Each value below is that measurement rounded
-        // down to the nearest multiple of 5.
+        // higher floor than the rest of scripts/**. Raised to 90 by issue #22,
+        // which added the missing empty-input and no-basename-segment cases
+        // for checkCredentials/checkRead/describePath. Measured baseline at
+        // the time of this raise: 100% statements, 100% branches, 100%
+        // functions, 100% lines — every branch in this file is now covered,
+        // so the floor is set at 90 rather than 100 to leave headroom for a
+        // future rule this suite has not yet been extended to cover, not
+        // because the measurement itself fell short.
         "scripts/lib/guard/**": {
           lines: 90,
           functions: 100,
           statements: 90,
-          branches: 80,
+          branches: 90,
         },
-        // Raised again by issue #98, which added dedicated coverage for
-        // verify-bootstrap.mjs's main()/run()/assertGenerated(),
-        // verify-package.mjs's main()/runCheck(), sync-agents.mjs's
-        // main()/listFiles()/assertSourceDirectory(), and smoke-package.mjs's
-        // main()/installConsumer()/publicSubpaths() — the functions issue #88
-        // deliberately left out of its own, smaller raise. Measured baseline
-        // at the time of this raise: 88.52% statements, 80.05% branches,
-        // 93.79% functions, 88.48% lines, rounded down to the nearest
-        // multiple of 5, the same convention used for both earlier raises
-        // (#44, #88). It exists so a new automation script can't ship with
-        // zero tests and nothing reporting the number moving;
+        // Raised to 90 by issue #22, mainly by giving check-package.mjs's
+        // `main` an injectable repository root (matching sync-agents.mjs's
+        // own `main(argv, root = ...)` shape) so its publishable and
+        // rejection paths could be driven in-process, plus
+        // real coverage for smoke-package.mjs's and package-smoke.mjs's own
+        // argument parsing and error paths, sync-labels.mjs's spawnGh, and
+        // several small defensive branches (is-main.mjs, tarball.mjs,
+        // node-tools.mjs's npmCliPath, check-staged.mjs's git() failures).
+        // Measured baseline at the time of this raise: 96.27% statements,
+        // 90.26% branches, 99.28% functions, 96.27% lines. Branches — the
+        // binding constraint both times this threshold has been raised — sit
+        // barely above 90, so the floor is set at a flat 90 across every
+        // metric rather than rounded down further: rounding statements,
+        // functions and lines down to their own nearest multiple of 5 (95)
+        // would leave branches as the one outlier at 90, which reads as an
+        // arbitrary exception rather than the uniform floor this raise set
+        // out to establish. A few branches remain deliberately uncovered: the
+        // `process.exitCode = main(...)` line every CLI entry point guards
+        // with `isMain()`, reachable only when the file is the process entry
+        // point itself, and smoke-package.mjs's ERR_SMOKE_NO_PACKAGE_NAME
+        // path, which only an injected root could reach and this issue's
+        // scope limited that injection to check-package.mjs alone (see its
+        // PR's UNRESOLVED note). It exists so a new automation script can't
+        // ship with zero tests and nothing reporting the number moving;
         // scripts/lib/guard/** also counts toward this aggregate, on top of
         // its own stricter floor above.
         "scripts/**": {
-          lines: 85,
+          lines: 90,
           functions: 90,
-          statements: 85,
-          branches: 80,
+          statements: 90,
+          branches: 90,
         },
       },
     },

@@ -84,6 +84,17 @@ describe("stagedChanges", () => {
     commit(dir);
     expect(stagedChanges(dir)).toEqual([]);
   });
+
+  it("throws ERR_GIT_FAILED when cwd is not a git repository", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "check-staged-not-a-repo-"));
+    repos.push(dir);
+    expect(() => stagedChanges(dir)).toThrow(/ERR_GIT_FAILED/);
+  });
+
+  it("throws ERR_GIT_UNAVAILABLE when git cannot even be spawned in cwd", () => {
+    const missing = path.join(tmpdir(), "check-staged-does-not-exist-xyz");
+    expect(() => stagedChanges(missing)).toThrow(/ERR_GIT_UNAVAILABLE/);
+  });
 });
 
 describe("checkStagedChange", () => {
