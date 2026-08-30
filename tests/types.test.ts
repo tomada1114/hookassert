@@ -4,6 +4,7 @@ import type {
   Decision,
   EventName,
   ExecOutcome,
+  PayloadOrigin,
   Provenance,
   ResolvedHook,
   SettingsLayer,
@@ -400,6 +401,44 @@ describe("ExecOutcome", () => {
       // @ts-expect-error every field is required, including timedOut
       const outcome: ExecOutcome = { exitCode: 0, stdout: "", stderr: "" };
       void outcome;
+    };
+    expect(rejected).toBeTypeOf("function");
+  });
+});
+
+describe("PayloadOrigin", () => {
+  it("narrows on kind, exposing the envelope fields only on the recorded arm", () => {
+    const describe_ = (origin: PayloadOrigin): void => {
+      if (origin.kind === "recorded") {
+        expectTypeOf(origin.capturedAt).toEqualTypeOf<string>();
+        expectTypeOf(origin.sourceFile).toEqualTypeOf<string>();
+        expectTypeOf(origin.claudeVersion).toEqualTypeOf<string | undefined>();
+        return;
+      }
+      expectTypeOf(origin).toEqualTypeOf<{ readonly kind: "synthetic" }>();
+    };
+
+    expect(describe_).toBeTypeOf("function");
+  });
+
+  it("requires claudeVersion to be present, even when it is undefined", () => {
+    const rejected = (): void => {
+      // @ts-expect-error claudeVersion is `string | undefined`, not optional
+      const origin: PayloadOrigin = {
+        kind: "recorded",
+        capturedAt: "2026-01-15T10:00:00Z",
+        sourceFile: "/abs/envelope.json",
+      };
+      void origin;
+    };
+    expect(rejected).toBeTypeOf("function");
+  });
+
+  it("rejects envelope fields on the synthetic arm", () => {
+    const rejected = (): void => {
+      // @ts-expect-error a synthetic origin carries no envelope fields
+      const origin: PayloadOrigin = { kind: "synthetic", capturedAt: "now" };
+      void origin;
     };
     expect(rejected).toBeTypeOf("function");
   });

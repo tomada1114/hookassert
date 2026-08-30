@@ -48,6 +48,29 @@ function denyValuesFor(eventSpec: EventSpec): ReadonlySet<string> {
   );
 }
 
+/**
+ * Whether the loaded spec documents any channel at all by which `eventSpec`
+ * could produce a `deny` {@link Decision}.
+ *
+ * @remarks
+ * The two channels {@link resolveDecision} can return a `deny` from, and
+ * nothing else: an honored blocking exit code (`blockable` *and* an
+ * `exitCodeEffects` row whose effect is `block`), or a deny-shaped value in
+ * the event's own `jsonDecisions`. `blockable` alone is not the predicate —
+ * it describes only the exit-code channel, so `PermissionRequest`,
+ * `PostToolUse` and `PostToolUseFailure` all deny exclusively through JSON
+ * while being `blockable: false`. `fixture/load.ts` uses this to reject a
+ * `expect.decision: "deny"` that could never come true, and reading it from
+ * here rather than reimplementing it keeps that rejection in lockstep with
+ * what this resolver will actually return.
+ */
+export function canProduceDeny(eventSpec: EventSpec): boolean {
+  const viaExitCode =
+    eventSpec.blockable &&
+    eventSpec.exitCodeEffects.some((row) => row.effect === "block");
+  return viaExitCode || denyValuesFor(eventSpec).size > 0;
+}
+
 /** The subset of `eventSpec.jsonDecisions` that are allow-shaped. */
 function allowValuesFor(eventSpec: EventSpec): ReadonlySet<string> {
   return new Set(

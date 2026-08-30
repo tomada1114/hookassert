@@ -212,8 +212,11 @@ function checkFixtureCase(violations: Violations, path: string, value: unknown):
   if (typeof value["event"] !== "string" || value["event"].length === 0) {
     violations.add(`${path}.event`, "must be a non-empty string");
   }
-  if (value["tool"] !== undefined && typeof value["tool"] !== "string") {
-    violations.add(`${path}.tool`, "must be a string when present");
+  if (
+    value["tool"] !== undefined &&
+    (typeof value["tool"] !== "string" || value["tool"].length === 0)
+  ) {
+    violations.add(`${path}.tool`, "must be a non-empty string when present");
   }
   if (value["origin"] !== undefined) {
     checkOrigin(violations, `${path}.origin`, value["origin"]);
@@ -225,8 +228,11 @@ function checkFixtureCase(violations: Violations, path: string, value: unknown):
   if (value["dryRun"] !== undefined && typeof value["dryRun"] !== "boolean") {
     violations.add(`${path}.dryRun`, "must be a boolean when present");
   }
-  if (value["cwd"] !== undefined && typeof value["cwd"] !== "string") {
-    violations.add(`${path}.cwd`, "must be a string when present");
+  if (
+    value["cwd"] !== undefined &&
+    (typeof value["cwd"] !== "string" || value["cwd"].length === 0)
+  ) {
+    violations.add(`${path}.cwd`, "must be a non-empty string when present");
   }
 }
 

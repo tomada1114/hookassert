@@ -263,9 +263,13 @@ export class FixtureNotFoundError extends HookassertError {
  *
  * @remarks
  * A case that declares `expect.decision: "deny"` against an event the loaded
- * spec marks `blockable: false` (`spec.events[event].blockable`) cannot
- * possibly pass: that event has no mechanism to block anything, so no hook
- * run against it will ever produce a `deny` decision. `fixture/load.ts`
+ * spec documents no deny channel for — neither an honored blocking exit code
+ * nor a deny-shaped value in its own `jsonDecisions`, which is what
+ * `decision/`'s `canProduceDeny` weighs — cannot possibly pass: no hook run
+ * against it will ever produce a `deny` decision. `blockable` alone is *not*
+ * that test; it describes only the exit-code channel, and `PermissionRequest`,
+ * `PostToolUse` and `PostToolUseFailure` all deny through JSON while being
+ * `blockable: false`. `fixture/load.ts`
  * raises this at load time, before any process is spawned for the case —
  * the declaration cannot possibly be true, so it fails before any process
  * starts, never after one has already run. `message` proposes a workable
@@ -282,7 +286,7 @@ export class FixtureUnblockableDecisionError extends HookassertError {
   /** Absolute path of the fixture file the offending case was declared in. */
   readonly file: string;
 
-  /** The event the offending case declares, which the loaded spec marks not blockable. */
+  /** The event the offending case declares, which the loaded spec documents no deny channel for. */
   readonly event: EventName;
 
   /** The decision the offending case expects, which that event can never produce. */
@@ -290,14 +294,15 @@ export class FixtureUnblockableDecisionError extends HookassertError {
 
   /**
    * @param file - Absolute path of the fixture file the case was declared in.
-   * @param event - The event the case targets, which the spec marks not blockable.
+   * @param event - The event the case targets, which the spec documents no deny channel for.
    * @param decision - The decision the case expects.
    */
   constructor(file: string, event: EventName, decision: string) {
     super(
       `Fixture ${file} expects decision "${decision}" from event "${event}", ` +
-        `but the loaded spec marks "${event}" as not blockable: it has no ` +
-        `mechanism to produce a "deny" decision, so this case can never pass. ` +
+        `but the loaded spec gives "${event}" no way to deny: it honors no ` +
+        `blocking exit code and documents no deny-shaped value in its own ` +
+        `jsonDecisions, so this case can never pass. ` +
         `Expect decision: "error" instead, or drop the "decision" expectation ` +
         `and assert "stdoutContains"/"stderrContains" against the hook's own output.`,
     );

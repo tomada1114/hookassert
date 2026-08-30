@@ -1,4 +1,4 @@
 cases:
-  - event: PostToolUse
+  - event: Notification
     expect:
       decision: deny

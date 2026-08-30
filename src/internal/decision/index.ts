@@ -12,4 +12,4 @@
  */
 
 export { allowed, denied, errored, passed, unknownDecision } from "./factory.js";
-export { exit2OverridesAllowJson, resolveDecision } from "./resolve.js";
+export { canProduceDeny, exit2OverridesAllowJson, resolveDecision } from "./resolve.js";

@@ -103,7 +103,11 @@ describe("loadFixtureFile: the happy path", () => {
     });
   });
 
-  it("defaults.timeoutMs/env/cwd apply to a case that does not override them", () => {
+  // The loader carries `defaults` through verbatim and leaves a case that
+  // declares no override of its own `undefined`; *applying* the fallback is a
+  // later pipeline stage's job, so what is asserted here is that the two
+  // halves survive the load intact, not that a merge happened.
+  it("carries defaults through and leaves an un-overridden case's own fields undefined", () => {
     const file = loadFixtureFile(fixturePath("defaults.yaml"), spec);
 
     expect(file.defaults).toEqual({
@@ -183,12 +187,15 @@ describe("loadFixtureFile: ERR_FIXTURE_SCHEMA (exit 5)", () => {
 });
 
 describe("loadFixtureFile: ERR_FIXTURE_UNBLOCKABLE_DECISION (exit 5)", () => {
-  it("throws ERR_FIXTURE_UNBLOCKABLE_DECISION (exit 5) for expect.decision: deny on a non-blockable event, before any process starts", () => {
+  it("throws ERR_FIXTURE_UNBLOCKABLE_DECISION (exit 5) for expect.decision: deny on an event with no deny channel at all, before any process starts", () => {
     // This static-layer module never imports src/internal/exec/ or
     // src/internal/record/ — enforced by eslint.config.mjs's
     // boundaries/static-does-not-reach-dynamic — so there is structurally no
     // way for a process to have been spawned by the time this throws.
-    expect(spec.events["PostToolUse"]?.blockable).toBe(false);
+    // Notification denies through neither channel: not blockable, and no
+    // documented jsonDecisions to carry a deny-shaped value.
+    expect(spec.events["Notification"]?.blockable).toBe(false);
+    expect(spec.events["Notification"]?.jsonDecisions).toEqual([]);
 
     const error = caught(() =>
       loadFixtureFile(fixturePath("unblockable-deny.yaml"), spec),
@@ -198,7 +205,7 @@ describe("loadFixtureFile: ERR_FIXTURE_UNBLOCKABLE_DECISION (exit 5)", () => {
     const decisionError = error as FixtureUnblockableDecisionError;
     expect(decisionError.code).toBe("ERR_FIXTURE_UNBLOCKABLE_DECISION");
     expect(decisionError.exitCode).toBe(5);
-    expect(decisionError.event).toBe("PostToolUse");
+    expect(decisionError.event).toBe("Notification");
     expect(decisionError.decision).toBe("deny");
   });
 
@@ -233,6 +240,27 @@ describe("loadFixtureFile: ERR_FIXTURE_UNBLOCKABLE_DECISION (exit 5)", () => {
       ),
     ).not.toThrow();
   });
+
+  // `blockable` describes only the exit-code channel, so it is the wrong test
+  // on its own: these three events are `blockable: false` yet deny through
+  // their own `jsonDecisions`, and resolveDecision returns `denied(
+  // "permission-decision", …)` for each. Rejecting them at load time would
+  // make `expect.decision: deny` unusable for the most common PostToolUse
+  // assertion there is.
+  it.each([["PermissionRequest"], ["PostToolUse"], ["PostToolUseFailure"]])(
+    "does not throw for expect.decision: deny on %s, which denies through JSON while not being blockable",
+    (event) => {
+      expect(spec.events[event]?.blockable).toBe(false);
+
+      expect(() =>
+        loadFixture(
+          { cases: [{ event, expect: { decision: "deny" } }] },
+          fixturePath("synthetic.yaml"),
+          spec,
+        ),
+      ).not.toThrow();
+    },
+  );
 });
 
 describe("loadFixtureFile: filesystem edge cases", () => {
@@ -403,8 +431,10 @@ describe("schema and hand-written guards agree", () => {
     ["case.origin.recorded empty", (f) => (firstCase(f)["origin"] = { recorded: "" })],
     ["case.origin missing recorded", (f) => (firstCase(f)["origin"] = {})],
     ["case.tool wrong type", (f) => (firstCase(f)["tool"] = 1)],
+    ["case.tool empty string", (f) => (firstCase(f)["tool"] = "")],
     ["case.dryRun wrong type", (f) => (firstCase(f)["dryRun"] = "false")],
     ["case.cwd wrong type", (f) => (firstCase(f)["cwd"] = 1)],
+    ["case.cwd empty string", (f) => (firstCase(f)["cwd"] = "")],
     ["case has an unrecognized property", (f) => (firstCase(f)["extra"] = true)],
     ["settings entry empty string", (f) => (f["settings"] = [""])],
     ["cases not an array", (f) => (f["cases"] = "nope")],

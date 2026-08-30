@@ -11,7 +11,9 @@
  *
  * The load-time rejection this issue exists for lives in
  * {@link toFixtureCase}: a case whose `expect.decision` is `"deny"` against
- * an event `spec.events[event].blockable` marks `false` throws
+ * an event the spec documents no deny channel for — `decision/`'s
+ * `canProduceDeny`, which reads both the exit-code and the JSON channel
+ * rather than `blockable` alone — throws
  * {@link FixtureUnblockableDecisionError} while turning the raw case into a
  * typed `FixtureCase` — before `loadFixture` returns, so before any later
  * pipeline stage could spawn a process for it.
@@ -23,6 +25,7 @@ import path from "node:path";
 import { parse as parseYaml } from "yaml";
 
 import type { EventName, PayloadOrigin } from "../../types.js";
+import { canProduceDeny } from "../decision/index.js";
 import {
   FixtureNotFoundError,
   FixtureSchemaError,
@@ -52,45 +55,51 @@ import type {
  * key is forward-compatible data Claude Code itself produced, while a
  * fixture's `event` is a value the fixture's own author typed, so a typo
  * should fail loudly rather than silently match nothing.
+ *
+ * Typed as `Record<EventName, true>` rather than an array for the same
+ * reason that map is: widening `src/types.ts`'s `EventName` without
+ * extending this mirror is a type error here, instead of a loader that
+ * rejects every fixture naming the new event as "not a recognized Claude
+ * Code hook event".
  */
-const EVENT_NAMES: readonly EventName[] = [
-  "SessionStart",
-  "Setup",
-  "InstructionsLoaded",
-  "UserPromptSubmit",
-  "UserPromptExpansion",
-  "MessageDisplay",
-  "PreToolUse",
-  "PermissionRequest",
-  "PostToolUse",
-  "PostToolUseFailure",
-  "PostToolBatch",
-  "PermissionDenied",
-  "Notification",
-  "SubagentStart",
-  "SubagentStop",
-  "TaskCreated",
-  "TaskCompleted",
-  "Stop",
-  "StopFailure",
-  "TeammateIdle",
-  "ConfigChange",
-  "CwdChanged",
-  "DirectoryAdded",
-  "FileChanged",
-  "WorktreeCreate",
-  "WorktreeRemove",
-  "PreCompact",
-  "PostCompact",
-  "PreModelSwitch",
-  "PostModelSwitch",
-  "SessionEnd",
-  "Elicitation",
-  "ElicitationResult",
-];
+const EVENT_NAMES: Readonly<Record<EventName, true>> = {
+  SessionStart: true,
+  Setup: true,
+  InstructionsLoaded: true,
+  UserPromptSubmit: true,
+  UserPromptExpansion: true,
+  MessageDisplay: true,
+  PreToolUse: true,
+  PermissionRequest: true,
+  PostToolUse: true,
+  PostToolUseFailure: true,
+  PostToolBatch: true,
+  PermissionDenied: true,
+  Notification: true,
+  SubagentStart: true,
+  SubagentStop: true,
+  TaskCreated: true,
+  TaskCompleted: true,
+  Stop: true,
+  StopFailure: true,
+  TeammateIdle: true,
+  ConfigChange: true,
+  CwdChanged: true,
+  DirectoryAdded: true,
+  FileChanged: true,
+  WorktreeCreate: true,
+  WorktreeRemove: true,
+  PreCompact: true,
+  PostCompact: true,
+  PreModelSwitch: true,
+  PostModelSwitch: true,
+  SessionEnd: true,
+  Elicitation: true,
+  ElicitationResult: true,
+};
 
 function isEventName(value: string): value is EventName {
-  return (EVENT_NAMES as readonly string[]).includes(value);
+  return Object.hasOwn(EVENT_NAMES, value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -194,7 +203,7 @@ function resolveOrigin(
  * @throws {FixtureSchemaError} `rawCase.event` is not a recognized event, or
  * its `origin.recorded` envelope cannot be resolved.
  * @throws {FixtureUnblockableDecisionError} `rawCase.expect.decision` is
- * `"deny"` against an event the loaded spec marks not blockable.
+ * `"deny"` against an event the loaded spec documents no deny channel for.
  */
 function toFixtureCase(
   rawCase: RawFixtureCase,
@@ -205,7 +214,12 @@ function toFixtureCase(
   const event = requireEventName(rawCase.event, index, fixturePath);
 
   const decision = rawCase.expect.decision;
-  if (decision === "deny" && spec.events[event]?.blockable === false) {
+  const eventSpec = spec.events[event];
+  // Only when the spec actually classifies the event: one it does not carry
+  // at all is a build whose EventName union runs ahead of the loaded spec,
+  // which resolveDecision reports as `unknown` rather than treating as
+  // "cannot deny".
+  if (decision === "deny" && eventSpec !== undefined && !canProduceDeny(eventSpec)) {
     throw new FixtureUnblockableDecisionError(fixturePath, event, decision);
   }
 
@@ -216,7 +230,7 @@ function toFixtureCase(
     origin: resolveOrigin(rawCase.origin, index, fixturePath),
     expect: {
       fires: rawCase.expect.fires,
-      decision: rawCase.expect.decision,
+      decision,
       exitCode: rawCase.expect.exitCode,
       stdoutContains: rawCase.expect.stdoutContains,
       stderrContains: rawCase.expect.stderrContains,
@@ -244,7 +258,7 @@ function toFixtureCase(
  * `schema/fixture.schema.json`, names an unrecognized event, or points
  * `origin.recorded` at an envelope file that cannot be resolved.
  * @throws {FixtureUnblockableDecisionError} a case expects `decision:
- * "deny"` from an event `spec` marks not blockable.
+ * "deny"` from an event `spec` documents no deny channel for.
  */
 export function loadFixture(raw: unknown, filePath: string, spec: Spec): FixtureFile {
   if (!isValidRawFixtureFile(raw)) {
@@ -269,7 +283,7 @@ export function loadFixture(raw: unknown, filePath: string, spec: Spec): Fixture
  * @throws {FixtureSchemaError} `filePath`'s content is not valid YAML, or
  * does not satisfy `schema/fixture.schema.json` once parsed.
  * @throws {FixtureUnblockableDecisionError} a case expects `decision:
- * "deny"` from an event `spec` marks not blockable.
+ * "deny"` from an event `spec` documents no deny channel for.
  */
 export function loadFixtureFile(filePath: string, spec: Spec): FixtureFile {
   let text: string;
@@ -300,7 +314,7 @@ export function loadFixtureFile(filePath: string, spec: Spec): FixtureFile {
  * @throws {FixtureSchemaError} one of `filePaths`' content is not valid
  * YAML, or does not satisfy `schema/fixture.schema.json` once parsed.
  * @throws {FixtureUnblockableDecisionError} a case in one of `filePaths`
- * expects `decision: "deny"` from an event `spec` marks not blockable.
+ * expects `decision: "deny"` from an event `spec` documents no deny channel for.
  */
 export function loadFixtures(filePaths: readonly string[], spec: Spec): FixtureSet {
   return {
