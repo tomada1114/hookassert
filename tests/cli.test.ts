@@ -1,11 +1,60 @@
-import { pathToFileURL } from "node:url";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { isMain, main, runCli } from "../src/cli.js";
+import { isMain, main, runCli, type CliDeps } from "../src/cli.js";
+import { createUnimplementedSpawner } from "../src/internal/spawner.js";
+import type { Spawner, SpawnRequest } from "../src/internal/spawner.js";
+import type { ExecOutcome } from "../src/types.js";
+
+// Reaching src/internal/spawner.ts directly (rather than through
+// src/index.ts's exports, per the writing-tests skill) is a deliberate,
+// narrowly scoped exception: explain's zero-spawn guarantee can only be
+// proven by injecting a real `Spawner` implementation into its dependency
+// graph, and that interface has no public surface — see
+// eslint.config.mjs's "tests/static-layer-unit-tests" block for the full
+// reasoning.
+
+const FIXTURES_DIR = fileURLToPath(new URL("./fixtures/cli/", import.meta.url));
+const PROJECT_WITH_HOOKS_DIR = path.join(FIXTURES_DIR, "project-with-hooks");
+const PROJECT_SETTINGS_FILE = path.join(
+  PROJECT_WITH_HOOKS_DIR,
+  ".claude",
+  "settings.json",
+);
+const EXPLICIT_SETTINGS_FILE = path.join(FIXTURES_DIR, "explicit-settings.json");
+// Never created on disk: loadSourceHooks treats a missing settings file as
+// contributing zero hooks, so this is how a test opts a layer out entirely.
+const NO_SUCH_DIR = path.join(FIXTURES_DIR, "no-such-directory");
+
+/** The shipped spec's own declared range, from `spec/claude-code-2.1.251-2.2.0.json`. */
+const SPEC_RANGE = ">=2.1.251 <2.2.0";
+
+/** Records every call rather than performing one, so a test can assert `calls.length === 0`. */
+class CountingSpawner implements Spawner {
+  readonly calls: SpawnRequest[] = [];
+
+  spawn(req: SpawnRequest): Promise<ExecOutcome> {
+    this.calls.push(req);
+    return Promise.resolve({ exitCode: 0, stdout: "", stderr: "", timedOut: false });
+  }
+}
+
+function explainDeps(overrides: Partial<CliDeps> = {}): CliDeps {
+  return {
+    cwd: overrides.cwd ?? PROJECT_WITH_HOOKS_DIR,
+    home: overrides.home ?? NO_SUCH_DIR,
+    env: overrides.env ?? {},
+    spawner: overrides.spawner ?? new CountingSpawner(),
+  };
+}
 
 /** The commands hookassert will ship, in the order the usage text lists them. */
 const SUBCOMMANDS = ["explain", "lint", "record", "test"] as const;
+
+/** The commands with no behavior yet — `explain` is this issue's own subject. */
+const STUB_SUBCOMMANDS = ["lint", "record", "test"] as const;
 
 /** The `ERR_` shape AGENTS.md fixes for every published error code. */
 const ERROR_CODE = /^ERR_[A-Z0-9_]+$/;
@@ -72,14 +121,17 @@ describe("runCli dispatch", () => {
     expect(result.stderr).toContain('unknown command "--json"');
   });
 
-  it.each(SUBCOMMANDS)("exits 4 with a not-yet-implemented message for %s", (name) => {
-    const result = runCli([name], "my-tool");
-    expect(result.exitCode).toBe(4);
-    expect(result.stdout).toBe("");
-    expect(firstLine(result.stderr)).toBe(
-      `my-tool: ERR_USAGE: the "${name}" command is not implemented yet.`,
-    );
-  });
+  it.each(STUB_SUBCOMMANDS)(
+    "exits 4 with a not-yet-implemented message for %s",
+    (name) => {
+      const result = runCli([name], "my-tool");
+      expect(result.exitCode).toBe(4);
+      expect(result.stdout).toBe("");
+      expect(firstLine(result.stderr)).toBe(
+        `my-tool: ERR_USAGE: the "${name}" command is not implemented yet.`,
+      );
+    },
+  );
 
   it("points at the help flag on every usage error", () => {
     expect(runCli(["frobnicate"], "my-tool").stderr).toContain(
@@ -96,6 +148,215 @@ describe("runCli dispatch", () => {
 
   it("ends stderr with a newline so a terminal does not glue on the next line", () => {
     expect(runCli(["frobnicate"]).stderr.endsWith("\n")).toBe(true);
+  });
+});
+
+describe("runCli explain", () => {
+  it("wires settings + spec + matcher and prints the firing set with layer, file, and line", () => {
+    const result = runCli(
+      ["explain", "PreToolUse", "Bash"],
+      "hookassert",
+      explainDeps(),
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("[project]");
+    expect(result.stdout).toContain(`${PROJECT_SETTINGS_FILE}:7`);
+    expect(result.stdout).toContain("./scripts/guard.sh");
+  });
+
+  it("prints a non-firing matcher's MatcherOutcome reason", () => {
+    const result = runCli(
+      ["explain", "PreToolUse", "Bash"],
+      "hookassert",
+      explainDeps(),
+    );
+
+    expect(result.stdout).toContain(`${PROJECT_SETTINGS_FILE}:16`);
+    expect(result.stdout).toContain("./scripts/write-guard.sh");
+    expect(result.stdout).toContain(
+      "evaluated as an exact-match list and did not match Bash",
+    );
+  });
+
+  it("prints 'undetermined' when no Claude Code version can be resolved", () => {
+    const result = runCli(
+      ["explain", "PreToolUse", "Bash"],
+      "hookassert",
+      explainDeps(),
+    );
+
+    expect(result.stdout).toContain("Claude Code version: undetermined");
+  });
+
+  it("prints the resolved Claude Code version when one is known", () => {
+    const result = runCli(
+      ["explain", "PreToolUse", "Bash", "--claude-version", "2.1.300"],
+      "hookassert",
+      explainDeps(),
+    );
+
+    expect(result.stdout).toContain("Claude Code version: 2.1.300");
+  });
+
+  it("always prints the spec's declared claudeCodeRange", () => {
+    const result = runCli(
+      ["explain", "PreToolUse", "Bash"],
+      "hookassert",
+      explainDeps(),
+    );
+
+    expect(result.stdout).toContain(`Spec range: ${SPEC_RANGE}`);
+  });
+
+  it("--claude-version overrides HOOKASSERT_CLAUDE_VERSION", () => {
+    const result = runCli(
+      ["explain", "PreToolUse", "Bash", "--claude-version", "2.1.300"],
+      "hookassert",
+      explainDeps({ env: { HOOKASSERT_CLAUDE_VERSION: "2.1.260" } }),
+    );
+
+    expect(result.stdout).toContain("Claude Code version: 2.1.300");
+    expect(result.stdout).not.toContain("2.1.260");
+  });
+
+  it("uses HOOKASSERT_CLAUDE_VERSION when --claude-version is absent", () => {
+    const result = runCli(
+      ["explain", "PreToolUse", "Bash"],
+      "hookassert",
+      explainDeps({ env: { HOOKASSERT_CLAUDE_VERSION: "2.1.280" } }),
+    );
+
+    expect(result.stdout).toContain("Claude Code version: 2.1.280");
+  });
+
+  it("exits 4 with ERR_USAGE when explain is given an unrecognized option", () => {
+    const result = runCli(["explain", "--bogus"], "hookassert", explainDeps());
+
+    expect(result.exitCode).toBe(4);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("ERR_USAGE");
+  });
+
+  it("exits 4 with ERR_USAGE when <event> is missing", () => {
+    const result = runCli(["explain"], "hookassert", explainDeps());
+
+    expect(result.exitCode).toBe(4);
+    expect(result.stderr).toContain("ERR_USAGE");
+    expect(result.stderr).toContain("<event>");
+  });
+
+  it("exits 4 with ERR_USAGE when <event> is not a documented Claude Code event", () => {
+    const result = runCli(["explain", "NotARealEvent"], "hookassert", explainDeps());
+
+    expect(result.exitCode).toBe(4);
+    expect(result.stderr).toContain("ERR_USAGE");
+    expect(result.stderr).toContain("NotARealEvent");
+  });
+
+  it("exits 4 with ERR_USAGE when --claude-version is not major.minor.patch", () => {
+    const result = runCli(
+      ["explain", "PreToolUse", "Bash", "--claude-version", "not-a-version"],
+      "hookassert",
+      explainDeps(),
+    );
+
+    expect(result.exitCode).toBe(4);
+    expect(result.stderr).toContain("ERR_USAGE");
+  });
+
+  it("performs exactly zero spawns", () => {
+    const spawner = new CountingSpawner();
+    const result = runCli(
+      ["explain", "PreToolUse", "Bash"],
+      "hookassert",
+      explainDeps({ spawner }),
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(spawner.calls).toHaveLength(0);
+  });
+
+  it("accepts --format pretty explicitly", () => {
+    const result = runCli(
+      ["explain", "PreToolUse", "Bash", "--format", "pretty"],
+      "hookassert",
+      explainDeps(),
+    );
+
+    expect(result.exitCode).toBe(0);
+  });
+
+  it.each(["json", "github"])(
+    "rejects the %s report format as not implemented yet",
+    (format) => {
+      const result = runCli(
+        ["explain", "PreToolUse", "Bash", "--format", format],
+        "hookassert",
+        explainDeps(),
+      );
+
+      expect(result.exitCode).toBe(4);
+      expect(result.stderr).toContain("ERR_USAGE");
+      expect(result.stderr).toContain("not implemented yet");
+    },
+  );
+
+  it("rejects --emit-fixtures as not implemented yet", () => {
+    const result = runCli(
+      ["explain", "PreToolUse", "Bash", "--emit-fixtures", "/tmp/hookassert-out"],
+      "hookassert",
+      explainDeps(),
+    );
+
+    expect(result.exitCode).toBe(4);
+    expect(result.stderr).toContain("ERR_USAGE");
+    expect(result.stderr).toContain("--emit-fixtures");
+  });
+
+  it("adds an explicit-layer settings file with --settings", () => {
+    const result = runCli(
+      ["explain", "PreToolUse", "Bash", "--settings", EXPLICIT_SETTINGS_FILE],
+      "hookassert",
+      explainDeps({ cwd: NO_SUCH_DIR }),
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("[explicit]");
+    expect(result.stdout).toContain("./scripts/explicit-guard.sh");
+  });
+
+  it("rethrows a non-HookassertError rather than reporting it as a usage failure", () => {
+    // Passing a directory as --settings makes readFileSync fail with a plain
+    // EISDIR Error, not one of loadSourceHooks' own recognized cases — this
+    // proves runCli only turns a HookassertError into a graceful CliResult
+    // and lets anything else propagate rather than mislabeling it.
+    expect(() =>
+      runCli(
+        ["explain", "PreToolUse", "Bash", "--settings", PROJECT_WITH_HOOKS_DIR],
+        "hookassert",
+        explainDeps(),
+      ),
+    ).toThrow(/EISDIR/);
+  });
+});
+
+describe("createUnimplementedSpawner", () => {
+  it("rejects every call, as a placeholder until a real Spawner lands", async () => {
+    const spawner = createUnimplementedSpawner();
+
+    await expect(
+      spawner.spawn({
+        form: "exec",
+        command: "true",
+        args: [],
+        cwd: "/",
+        env: {},
+        stdin: "",
+        timeoutMs: 1000,
+      }),
+    ).rejects.toThrow(/spawning is not implemented yet/);
   });
 });
 

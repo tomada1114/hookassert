@@ -1,11 +1,27 @@
 #!/usr/bin/env node
 
 import { realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 
-import { UsageError } from "./internal/errors.js";
+import { HookassertError, UsageError } from "./internal/errors.js";
+import { matchHooks, type VersionContext } from "./internal/matcher/index.js";
+import {
+  buildReportHeader,
+  renderPretty,
+  type ExplainReport,
+} from "./internal/report/index.js";
+import {
+  discoverSources,
+  hooksForEvent,
+  loadSettings,
+} from "./internal/settings/index.js";
+import { loadSpecFile, parseClaudeVersion } from "./internal/spec/index.js";
+import { createUnimplementedSpawner, type Spawner } from "./internal/spawner.js";
+import type { EventName } from "./types.js";
 
 export interface CliResult {
   exitCode: number;
@@ -14,13 +30,35 @@ export interface CliResult {
 }
 
 /**
+ * The environment variable `explain` and `lint` read a Claude Code version
+ * from, when `--claude-version` was not given.
+ *
+ * @remarks
+ * Named here rather than inline so the two places that read it (this
+ * module's `resolveVersionContext`) and describe it (the README, the design
+ * section of the `cli-explain` issue) stay in agreement.
+ */
+const CLAUDE_VERSION_ENV_VAR = "HOOKASSERT_CLAUDE_VERSION";
+
+/**
+ * The shipped hooks spec `explain` and `lint` load. `#7`'s design leaves
+ * multi-spec selection to a later issue; today exactly one spec file ships,
+ * and both commands load it unconditionally.
+ */
+const SPEC_PATH = fileURLToPath(
+  new URL("../spec/claude-code-2.1.251-2.2.0.json", import.meta.url),
+);
+
+/**
  * The commands hookassert ships, with the one-line summary each gets in the
  * usage text.
  *
  * @remarks
- * None of them has behavior yet. Naming all four here anyway is what makes the
- * usage text and the "unknown command" message agree with each other, and with
- * the routing that replaces this dispatch once the first command lands.
+ * `explain` is the first of the four with real behavior, wired in by this
+ * issue. `lint`, `record`, and `test` are still stubs: naming all four here
+ * anyway is what makes the usage text and the "unknown command" message
+ * agree with each other, and with the routing that replaces each stub once
+ * its own issue lands.
  */
 const COMMANDS = [
   ["explain", "Show which hooks a tool event fires, and why."],
@@ -39,6 +77,57 @@ function isSubcommand(value: string): value is Subcommand {
   return commandNames().some((name) => name === value);
 }
 
+/**
+ * The full set of officially documented event names, mirroring
+ * `src/types.ts`'s `EventName` union.
+ *
+ * @remarks
+ * Typed as `Record<EventName, true>` rather than an array so the mirror
+ * cannot silently drift, the same technique `settings/load.ts`'s own
+ * `KNOWN_EVENT_NAMES` uses: widening `EventName` without extending this map
+ * is a type error here rather than an `explain <event>` invocation that
+ * silently accepts an event this build does not actually know.
+ */
+const EVENT_NAMES: Readonly<Record<EventName, true>> = {
+  SessionStart: true,
+  Setup: true,
+  InstructionsLoaded: true,
+  UserPromptSubmit: true,
+  UserPromptExpansion: true,
+  MessageDisplay: true,
+  PreToolUse: true,
+  PermissionRequest: true,
+  PostToolUse: true,
+  PostToolUseFailure: true,
+  PostToolBatch: true,
+  PermissionDenied: true,
+  Notification: true,
+  SubagentStart: true,
+  SubagentStop: true,
+  TaskCreated: true,
+  TaskCompleted: true,
+  Stop: true,
+  StopFailure: true,
+  TeammateIdle: true,
+  ConfigChange: true,
+  CwdChanged: true,
+  DirectoryAdded: true,
+  FileChanged: true,
+  WorktreeCreate: true,
+  WorktreeRemove: true,
+  PreCompact: true,
+  PostCompact: true,
+  PreModelSwitch: true,
+  PostModelSwitch: true,
+  SessionEnd: true,
+  Elicitation: true,
+  ElicitationResult: true,
+};
+
+function isEventName(value: string): value is EventName {
+  return Object.hasOwn(EVENT_NAMES, value);
+}
+
 function usage(executable: string): string {
   const width = Math.max(...commandNames().map((name) => name.length));
   const commands = COMMANDS.map(
@@ -53,13 +142,16 @@ function usage(executable: string): string {
 }
 
 /**
- * Render a usage error the way a terminal and a CI log both read it.
+ * Render a `HookassertError` the way a terminal and a CI log both read it.
  *
  * @remarks
  * The `code` leads, because that is the half a wrapper script may branch on;
- * the prose after it may be reworded in a patch release.
+ * the prose after it may be reworded in a patch release. Not scoped to
+ * `UsageError`: `explain` can also fail with a load error (`ERR_SETTINGS_PARSE`,
+ * `ERR_SPEC_SCHEMA`, `ERR_SPEC_NOT_FOUND`) when a `--settings` file or the
+ * shipped spec cannot be read, and both report through this same shape.
  */
-function usageFailure(error: UsageError, executable: string): CliResult {
+function failureResult(error: HookassertError, executable: string): CliResult {
   return {
     exitCode: error.exitCode,
     stdout: "",
@@ -69,21 +161,166 @@ function usageFailure(error: UsageError, executable: string): CliResult {
   };
 }
 
+/** The dependencies `explain` and `lint` are threaded through, for injection in tests. */
+export interface CliDeps {
+  /** Directory `project` and `local` settings, and a relative `--settings <file>`, resolve against. */
+  readonly cwd: string;
+
+  /** Directory `user` settings resolve against. */
+  readonly home: string;
+
+  /** Environment variables, read only for {@link CLAUDE_VERSION_ENV_VAR}. */
+  readonly env: Readonly<Record<string, string | undefined>>;
+
+  /**
+   * The command-execution seam. `explain` and `lint` accept it but never
+   * call it — see `src/internal/spawner.ts`'s own remark — so a
+   * `CountingSpawner` injected here is how `tests/cli.test.ts` proves the
+   * zero-spawn guarantee mechanically rather than by inspection.
+   */
+  readonly spawner: Spawner;
+}
+
+function resolveDeps(overrides: Partial<CliDeps>): CliDeps {
+  return {
+    cwd: overrides.cwd ?? process.cwd(),
+    home: overrides.home ?? homedir(),
+    env: overrides.env ?? process.env,
+    spawner: overrides.spawner ?? createUnimplementedSpawner(),
+  };
+}
+
+/**
+ * Resolve the Claude Code version `explain` and `lint` run against, from the
+ * two-step order this issue implements.
+ *
+ * @remarks
+ * `--claude-version` beats {@link CLAUDE_VERSION_ENV_VAR}, which beats
+ * `"undetermined"`. Deliberately no third step: a `VersionProbe` spawning
+ * `claude --version`, and a fallback to the last `record` session's
+ * recorded version, are both `#11`'s work, and adding either here would spawn
+ * a process from a command whose whole point is guaranteeing it never does.
+ *
+ * @throws {UsageError} `claudeVersionFlag` (or the environment variable, when
+ * the flag is absent) is not a `major.minor.patch` string.
+ */
+function resolveVersionContext(
+  claudeVersionFlag: string | undefined,
+  env: Readonly<Record<string, string | undefined>>,
+): VersionContext {
+  const text = claudeVersionFlag ?? env[CLAUDE_VERSION_ENV_VAR];
+  if (text === undefined) {
+    return { kind: "undetermined" };
+  }
+  try {
+    return { kind: "known", version: parseClaudeVersion(text) };
+  } catch {
+    throw new UsageError(
+      `"${text}" is not a valid major.minor.patch Claude Code version.`,
+    );
+  }
+}
+
+/** `explain`'s own option table: `common` plus `--emit-fixtures`. */
+const EXPLAIN_OPTIONS = {
+  settings: { type: "string", multiple: true },
+  "claude-version": { type: "string" },
+  format: { type: "string" },
+  "emit-fixtures": { type: "string" },
+  help: { type: "boolean", short: "h" },
+} as const;
+
+/**
+ * `parseArgs({ strict: true })` throws on an unknown option, a missing
+ * required value, or a value of the wrong type. Translated here into a
+ * `UsageError` rather than letting the raw exception escape `runCli`.
+ */
+function runExplain(args: readonly string[], deps: CliDeps): CliResult {
+  let parsed;
+  try {
+    parsed = parseArgs({
+      args,
+      strict: true,
+      allowPositionals: true,
+      options: EXPLAIN_OPTIONS,
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new UsageError(`invalid options for explain: ${reason}`);
+  }
+
+  const [event, tool] = parsed.positionals;
+  if (event === undefined) {
+    throw new UsageError("explain requires an <event> argument.");
+  }
+  if (!isEventName(event)) {
+    throw new UsageError(
+      `unrecognized event ${JSON.stringify(event)}. ` +
+        `Expected one of the documented Claude Code hook events.`,
+    );
+  }
+
+  const format = parsed.values.format ?? "pretty";
+  if (format !== "pretty") {
+    throw new UsageError(
+      `the ${JSON.stringify(format)} report format is not implemented yet; only "pretty" renders.`,
+    );
+  }
+  if (parsed.values["emit-fixtures"] !== undefined) {
+    throw new UsageError("the --emit-fixtures option is not implemented yet.");
+  }
+
+  const versionContext = resolveVersionContext(
+    parsed.values["claude-version"],
+    deps.env,
+  );
+  const spec = loadSpecFile(SPEC_PATH);
+
+  const explicitSettings = parsed.values.settings;
+  const sources = discoverSources({
+    cwd: deps.cwd,
+    home: deps.home,
+    ...(explicitSettings === undefined ? {} : { explicit: explicitSettings }),
+  });
+  const settings = loadSettings(sources);
+  const hooks = hooksForEvent(settings, event);
+  const match = matchHooks(spec, versionContext, { event, hooks, target: tool });
+
+  const report: ExplainReport = {
+    header: buildReportHeader(versionContext, spec.claudeCodeRange),
+    event,
+    target: tool,
+    firing: match.firing,
+    matcherIgnored: match.matcherIgnored,
+    rejected: match.rejected,
+  };
+
+  return { exitCode: 0, stdout: renderPretty(report), stderr: "" };
+}
+
 /**
  * Run the package command without coupling its behavior to process globals.
  *
  * @param argv Arguments after the executable name.
  * @param executable Name or path shown in the usage line.
+ * @param deps Dependencies to override; anything omitted falls back to the
+ * live process (`process.cwd()`, `os.homedir()`, `process.env`) or, for
+ * `spawner`, a placeholder that rejects every call — see
+ * `src/internal/spawner.ts`.
  * @returns The process result a caller should observe.
  */
-export function runCli(argv: readonly string[], executable = "hookassert"): CliResult {
+export function runCli(
+  argv: readonly string[],
+  executable = "hookassert",
+  deps: Partial<CliDeps> = {},
+): CliResult {
   const [subcommand] = argv;
   if (subcommand === undefined || argv.includes("--help") || argv.includes("-h")) {
     return { exitCode: 0, stdout: usage(executable), stderr: "" };
   }
 
   if (!isSubcommand(subcommand)) {
-    return usageFailure(
+    return failureResult(
       new UsageError(
         `unknown command ${JSON.stringify(subcommand)}. ` +
           `Expected one of: ${commandNames().join(", ")}.`,
@@ -92,13 +329,28 @@ export function runCli(argv: readonly string[], executable = "hookassert"): CliR
     );
   }
 
-  // A recognised command with no implementation behind it is still a usage
-  // error: fabricating partial behavior would make the gap invisible to the
-  // issue that is supposed to close it.
-  return usageFailure(
-    new UsageError(`the ${JSON.stringify(subcommand)} command is not implemented yet.`),
-    executable,
-  );
+  const rest = argv.slice(1);
+
+  try {
+    switch (subcommand) {
+      case "explain":
+        return runExplain(rest, resolveDeps(deps));
+      case "lint":
+      case "record":
+      case "test":
+        // A recognised command with no implementation behind it is still a
+        // usage error: fabricating partial behavior would make the gap
+        // invisible to the issue that is supposed to close it.
+        throw new UsageError(
+          `the ${JSON.stringify(subcommand)} command is not implemented yet.`,
+        );
+    }
+  } catch (error) {
+    if (error instanceof HookassertError) {
+      return failureResult(error, executable);
+    }
+    throw error;
+  }
 }
 
 function canonicalize(target: string): string {

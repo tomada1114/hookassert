@@ -24,13 +24,18 @@ hookassert --help
 
 ## Commands
 
-- `hookassert explain` shows which hooks a tool event fires, and why.
+- `hookassert explain <event> [tool]` shows which hooks a tool event fires, and why:
+  every firing hook printed with its settings layer, absolute source file, and line, and
+  every matcher that did not fire printed with the reason. It never spawns a process —
+  the Claude Code version it runs against comes only from `--claude-version` or the
+  `HOOKASSERT_CLAUDE_VERSION` environment variable, falling back to `"undetermined"`.
 - `hookassert lint` checks hook declarations for matcher and command mistakes.
 - `hookassert record` captures real hook payloads from a Claude Code session.
 - `hookassert test` replays recorded events and asserts on what the hooks did.
 
-None of the four has behavior yet: each currently exits `4` with `ERR_USAGE`, so a
-script that wires one up fails loudly instead of silently reporting success.
+`lint`, `record`, and `test` have no behavior yet: each currently exits `4` with
+`ERR_USAGE`, so a script that wires one up fails loudly instead of silently reporting
+success.
 
 ## API
 
