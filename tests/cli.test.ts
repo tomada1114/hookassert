@@ -329,20 +329,54 @@ describe("runCli explain", () => {
     expect(result.exitCode).toBe(0);
   });
 
-  it.each(["json", "github"])(
-    "rejects the %s report format as not implemented yet",
-    (format) => {
-      const result = runCli(
-        ["explain", "PreToolUse", "Bash", "--format", format],
-        "hookassert",
-        explainDeps(),
-      );
+  it.each(["json", "github"])("selects the %s reporter", (format) => {
+    const result = runCli(
+      ["explain", "PreToolUse", "Bash", "--format", format],
+      "hookassert",
+      explainDeps(),
+    );
 
-      expect(result.exitCode).toBe(4);
-      expect(result.stderr).toContain("ERR_USAGE");
-      expect(result.stderr).toContain("not implemented yet");
-    },
-  );
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+  });
+
+  it("exits 4 with ERR_USAGE for an unrecognized --format value", () => {
+    const result = runCli(
+      ["explain", "PreToolUse", "Bash", "--format", "xml"],
+      "hookassert",
+      explainDeps(),
+    );
+
+    expect(result.exitCode).toBe(4);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("ERR_USAGE");
+    expect(result.stderr).toContain("xml");
+  });
+
+  it("rejects an unrecognized --format before a failing --settings path is even checked", () => {
+    // The format must be validated before any I/O: --settings resolution,
+    // spec loading, and loadSettings all come later in runExplain, so a
+    // failing --settings path must never mask a typo'd --format behind an
+    // unrelated ERR_SETTINGS_NOT_FOUND.
+    const result = runCli(
+      [
+        "explain",
+        "PreToolUse",
+        "Bash",
+        "--format",
+        "xml",
+        "--settings",
+        "no-such-settings.json",
+      ],
+      "hookassert",
+      explainDeps({ cwd: PROJECT_WITH_HOOKS_DIR }),
+    );
+
+    expect(result.exitCode).toBe(4);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("ERR_USAGE");
+    expect(result.stderr).toContain("xml");
+  });
 
   it("rejects --emit-fixtures as not implemented yet", () => {
     const result = runCli(
