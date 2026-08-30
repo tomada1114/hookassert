@@ -57,6 +57,7 @@ const {
   main,
   publicBinCommands,
   publicSubpaths,
+  resolveTarballArgument,
   unexportedEntryPath,
 } = await import("../scripts/smoke-package.mjs");
 const { repoRoot } = await import("../scripts/lib/node-tools.mjs");
@@ -221,6 +222,31 @@ describe("publicBinCommands and checkBinCommands", () => {
         bin: { "": "./dist/cli.js" },
       }),
     ).toThrow(/ERR_SMOKE_BIN_FAILED/);
+  });
+
+  it("does nothing, and spawns nothing, when the manifest declares no bin", () => {
+    const consumer = makeConsumer();
+
+    expect(() => checkBinCommands(consumer, "fixture-package", {})).not.toThrow();
+    expect(runNodeMock).not.toHaveBeenCalled();
+  });
+
+  it("throws ERR_SMOKE_BIN_INVALID when bin is an object with no usable command names", () => {
+    const consumer = makeConsumer();
+
+    expect(() => checkBinCommands(consumer, "fixture-package", { bin: {} })).toThrow(
+      /ERR_SMOKE_BIN_INVALID/,
+    );
+    expect(runNodeMock).not.toHaveBeenCalled();
+  });
+
+  it("throws ERR_SMOKE_BIN_INVALID for a command name that is a path segment", () => {
+    const consumer = makeConsumer();
+
+    expect(() =>
+      checkBinCommands(consumer, "fixture-package", { bin: { ".": "./dist/cli.js" } }),
+    ).toThrow(/ERR_SMOKE_BIN_INVALID/);
+    expect(runNodeMock).not.toHaveBeenCalled();
   });
 });
 
@@ -447,6 +473,48 @@ describe("publicSubpaths", () => {
         },
       }),
     ).toEqual([""]);
+  });
+});
+
+describe("resolveTarballArgument", () => {
+  it("accepts an explicit tarball", () => {
+    expect(resolveTarballArgument(["--tarball", "dist/package.tgz"])).toBe(
+      "dist/package.tgz",
+    );
+  });
+
+  it("resolves the single tarball in a pack directory", () => {
+    const packDir = makeConsumer();
+    writeFileSync(path.join(packDir, "fixture-1.0.0.tgz"), "");
+
+    expect(resolveTarballArgument(["--pack-dir", packDir])).toBe(
+      path.join(packDir, "fixture-1.0.0.tgz"),
+    );
+  });
+
+  it.each([
+    { args: [], reason: "neither flag given" },
+    {
+      args: ["--tarball", "one.tgz", "--pack-dir", "pack"],
+      reason: "both flags given",
+    },
+  ])("rejects when $reason", ({ args }) => {
+    expect(() => resolveTarballArgument(args)).toThrow(
+      /Pass exactly one of --pack-dir or --tarball/,
+    );
+  });
+
+  it.each([
+    { args: ["--tarball"], reason: "a missing value" },
+    { args: ["--tarball", "--pack-dir"], reason: "a flag-shaped value" },
+  ])("rejects --tarball with $reason", ({ args }) => {
+    expect(() => resolveTarballArgument(args)).toThrow(/requires a value/);
+  });
+
+  it("rejects an argument that is neither --pack-dir nor --tarball", () => {
+    expect(() => resolveTarballArgument(["--help"])).toThrow(
+      /Unknown argument: --help/,
+    );
   });
 });
 

@@ -1,5 +1,5 @@
 import consoleModule from "node:console";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,6 +17,7 @@ import {
   ghRun,
   main,
   resolveRepo,
+  spawnGh,
 } from "../scripts/sync-labels.mjs";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -142,6 +143,27 @@ describe("formatPlan", () => {
     const lines = text.split("\n");
     expect(lines[0]).toBe('+ create bug (d73a4a) "Bug."');
     expect(lines[1]).toBe('~ update chore: 000000 "Old." -> fef2c0 "New."');
+  });
+});
+
+describe("spawnGh", () => {
+  // The real `gh` CLI, not a fake: this is the one function whose whole job
+  // is spawning it, so its own test is the boundary mock/fake exception —
+  // `writing-tests`' "mock only at boundaries" — rather than exercising a
+  // fake through it. `ubuntu-latest` GitHub Actions runners ship `gh`
+  // preinstalled, and it is on the developer's PATH locally too.
+  it("captures stdout and a zero status when gh runs successfully", () => {
+    const result = spawnGh(["--version"]);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("gh version");
+    expect(result.error).toBeUndefined();
+  });
+
+  it("reports a spawn error instead of throwing when gh cannot be found on PATH", () => {
+    vi.stubEnv("PATH", "");
+    const result = spawnGh(["--version"]);
+    expect(result.status).toBeNull();
+    expect(result.error).toBeInstanceOf(Error);
   });
 });
 
@@ -362,6 +384,37 @@ describe("main", () => {
     );
     expect(logSpy).toHaveBeenCalledWith(
       expect.stringContaining(`applied ${String(mutations.length)} change(s)`),
+    );
+  });
+
+  it("does not log a change tally when every label already matches", () => {
+    // A dedicated fixture root with its own small manifest, rather than this
+    // repository's own `.github/labels.yml`: matching it label-for-label
+    // inline here would silently drift out of sync with that file.
+    const dir = mkdtempSync(path.join(tmpdir(), "sync-labels-test-"));
+    tempDirs.push(dir);
+    mkdirSync(path.join(dir, ".github"), { recursive: true });
+    writeFileSync(
+      path.join(dir, ".github", "labels.yml"),
+      "- name: bug\n  color: d73a4a\n  description: Bug.\n",
+    );
+    const { run } = makeFakeGh((args) => {
+      if (args[0] === "repo") {
+        return ok('{"nameWithOwner":"o/r"}');
+      }
+      if (args[1] === "list") {
+        return ok(
+          JSON.stringify([{ name: "bug", color: "d73a4a", description: "Bug." }]),
+        );
+      }
+      return ok();
+    });
+
+    const code = main([], { root: dir, run });
+    expect(code).toBe(0);
+    expect(logSpy).toHaveBeenCalledWith(expect.stringMatching(/already matches/));
+    expect(logSpy).not.toHaveBeenCalledWith(
+      expect.stringMatching(/applied \d+ change/),
     );
   });
 

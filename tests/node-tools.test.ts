@@ -137,6 +137,18 @@ describe("npmCliPath", () => {
     expect(found.endsWith("npm-cli.js")).toBe(true);
     expect(existsSync(found)).toBe(true);
   });
+
+  it("throws ERR_NPM_NOT_FOUND when neither install layout has npm next to Node", () => {
+    const dir = makeWorkspace("npm-cli-path-");
+    const originalExecPath = process.execPath;
+    process.execPath = path.join(dir, "node");
+
+    try {
+      expect(() => npmCliPath()).toThrow(/ERR_NPM_NOT_FOUND/);
+    } finally {
+      process.execPath = originalExecPath;
+    }
+  });
 });
 
 describe("resolveDependencyBin", () => {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { checkCredentials } from "../scripts/lib/guard/credentials.mjs";
-import { checkRead } from "../scripts/lib/guard/paths.mjs";
+import { checkRead, describePath } from "../scripts/lib/guard/paths.mjs";
 
 // Pure-function coverage for the secret-detection rules under
 // scripts/lib/guard/, used by scripts/check-staged.mjs. Nothing here spawns a
@@ -15,7 +15,17 @@ function secretShaped(...parts: string[]): string {
   return parts.join("");
 }
 
+describe("paths: describePath", () => {
+  it("names a root-only path the empty string, since it has no segments", () => {
+    expect(describePath("/")).toEqual({ posix: "/", name: "", parts: [] });
+  });
+});
+
 describe("paths: checkRead", () => {
+  it("allows an empty path", () => {
+    expect(checkRead("")).toBeNull();
+  });
+
   it("blocks reading a dotenv file", () => {
     expect(checkRead(".env")).toMatch(/\.env\*/);
   });
@@ -31,6 +41,10 @@ describe("paths: checkRead", () => {
 
 describe("credentials: checkCredentials", () => {
   const privateKey = secretShaped("-----BEGIN RSA ", "PRIVATE ", "KEY-----");
+
+  it("allows empty text", () => {
+    expect(checkCredentials("")).toBeNull();
+  });
 
   it("blocks a private key", () => {
     expect(checkCredentials(`${privateKey}\nMIIE…\n`)).toMatch(/private key/);
