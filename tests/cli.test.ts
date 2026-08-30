@@ -329,20 +329,29 @@ describe("runCli explain", () => {
     expect(result.exitCode).toBe(0);
   });
 
-  it.each(["json", "github"])(
-    "rejects the %s report format as not implemented yet",
-    (format) => {
-      const result = runCli(
-        ["explain", "PreToolUse", "Bash", "--format", format],
-        "hookassert",
-        explainDeps(),
-      );
+  it.each(["json", "github"])("selects the %s reporter for --format %s", (format) => {
+    const result = runCli(
+      ["explain", "PreToolUse", "Bash", "--format", format],
+      "hookassert",
+      explainDeps(),
+    );
 
-      expect(result.exitCode).toBe(4);
-      expect(result.stderr).toContain("ERR_USAGE");
-      expect(result.stderr).toContain("not implemented yet");
-    },
-  );
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+  });
+
+  it("exits 4 with ERR_USAGE for an unrecognized --format value", () => {
+    const result = runCli(
+      ["explain", "PreToolUse", "Bash", "--format", "xml"],
+      "hookassert",
+      explainDeps(),
+    );
+
+    expect(result.exitCode).toBe(4);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("ERR_USAGE");
+    expect(result.stderr).toContain("xml");
+  });
 
   it("rejects --emit-fixtures as not implemented yet", () => {
     const result = runCli(
