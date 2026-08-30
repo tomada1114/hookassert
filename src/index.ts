@@ -11,11 +11,12 @@
  * export. Adding a line here is an API change and needs a release-impact note
  * in the pull request.
  *
+ * Today the contract is types only, so the emitted module is empty: what a
+ * consumer runs is the `hookassert` command, not an import. The runtime
+ * surface, if any, is a decision each later issue makes deliberately rather
+ * than one this file arrived at.
+ *
  * @packageDocumentation
  */
 
-export { InvalidInputError, TimeoutError } from "./errors.js";
-export { normalizeIdentifier } from "./identifier.js";
-export type { NormalizeIdentifierOptions } from "./identifier.js";
-export { withTimeout } from "./timeout.js";
-export type { WithTimeoutOptions } from "./timeout.js";
+export type { EventName, Provenance, ResolvedHook, SettingsLayer } from "./types.js";

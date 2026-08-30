@@ -22,6 +22,49 @@ const NO_EXPORT_STAR = {
     "`export *` publishes symbols implicitly. Re-export each public symbol by name from src/index.ts.",
 };
 
+/**
+ * The static layer of `src/internal/`: modules that only read.
+ *
+ * @remarks
+ * See "Architecture" in AGENTS.md. None of these directories exists yet — the
+ * zone below is in place so the first module that lands in one of them is born
+ * inside the boundary rather than being moved into it later.
+ */
+const STATIC_LAYER = [
+  "settings",
+  "spec",
+  "matcher",
+  "fixture",
+  "decision",
+  "assert",
+  "lint",
+  "report",
+];
+
+/** The dynamic layer: the only modules allowed to spawn a process or write. */
+const DYNAMIC_LAYER = ["exec", "record"];
+
+/**
+ * Every specifier spelling that reaches a dynamic directory.
+ *
+ * @remarks
+ * `no-restricted-imports` matches the specifier *as written*, never the path it
+ * resolves to, so each spelling has to be listed or a violation walks straight
+ * through. Three `../` levels cover the deepest nesting the static layer is
+ * expected to grow, and the `**\/internal/` form covers anything rooted at the
+ * package rather than at the importing file.
+ */
+const DYNAMIC_LAYER_SPECIFIERS = DYNAMIC_LAYER.flatMap((directory) => [
+  `../${directory}`,
+  `../${directory}/*`,
+  `../../${directory}`,
+  `../../${directory}/*`,
+  `../../../${directory}`,
+  `../../../${directory}/*`,
+  `**/internal/${directory}`,
+  `**/internal/${directory}/**`,
+]);
+
 /** What `src/internal/**` is, in the words of the rule that made it private. */
 const INTERNAL_IS_PRIVATE =
   'src/internal/ is private: see "Architecture" in AGENTS.md. Tests reach it through the public surface in src/index.ts (see the `writing-tests` skill), and repository automation must not depend on package internals at all.';
@@ -296,6 +339,24 @@ export default defineConfig([
                 "**/dist/internal/**",
               ],
               message: INTERNAL_IS_PRIVATE,
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    name: "boundaries/static-does-not-reach-dynamic",
+    files: STATIC_LAYER.map((directory) => `src/internal/${directory}/**/*.ts`),
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: DYNAMIC_LAYER_SPECIFIERS,
+              message:
+                'The static layer only reads: see "Architecture" in AGENTS.md. Take the dynamic layer\'s result as a parameter — src/cli.ts is the composition root and the only module that may import both.',
             },
           ],
         },

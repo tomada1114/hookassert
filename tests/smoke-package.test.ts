@@ -124,6 +124,43 @@ describe("checkRuntimeImports", () => {
     ).not.toThrow();
     expect(runNodeMock).toHaveBeenCalledTimes(1);
   });
+
+  // An entry point that publishes types only emits an empty module, so there
+  // is no runtime name for the generated script to read. That is a usable
+  // package when a command ships alongside it, and an empty tarball when one
+  // does not — the two cases are told apart by the packed manifest's `bin`,
+  // and the assertion the generated script carries is where that shows up.
+  /** The script checkRuntimeImports writes into the consumer before running it. */
+  function generatedCheck(consumer: string): string {
+    return readFileSync(path.join(consumer, "check-runtime.mjs"), "utf8");
+  }
+
+  it("requires a named export when the package declares no command", () => {
+    runNodeMock.mockReturnValue({ status: 0, stdout: "", stderr: "" });
+    const consumer = makeConsumer();
+
+    checkRuntimeImports(consumer, "fixture-package", [""], true, false);
+
+    expect(generatedCheck(consumer)).toContain("names.length > 0 || false");
+  });
+
+  it("accepts a type-only entry point when the package declares a command", () => {
+    runNodeMock.mockReturnValue({ status: 0, stdout: "", stderr: "" });
+    const consumer = makeConsumer();
+
+    checkRuntimeImports(consumer, "fixture-package", [""], true, true);
+
+    expect(generatedCheck(consumer)).toContain("names.length > 0 || true");
+  });
+
+  it("says what it expected of a type-only entry point when the import fails", () => {
+    runNodeMock.mockReturnValue({ status: 1, stdout: "", stderr: "boom" });
+    const consumer = makeConsumer();
+
+    expect(() =>
+      checkRuntimeImports(consumer, "fixture-package", [""], true, true),
+    ).toThrow(/imports cleanly and exposes no default export/);
+  });
 });
 
 describe("publicBinCommands and checkBinCommands", () => {
@@ -206,6 +243,20 @@ describe("checkRequireInterop", () => {
 
     expect(() => checkRequireInterop(consumer, "fixture-package")).toThrow(
       /ERR_SMOKE_REQUIRE_FAILED/,
+    );
+  });
+
+  it.each([
+    ["requires a named export with no command", false],
+    ["accepts a type-only namespace beside a command", true],
+  ])("%s", (_label, hasCommand) => {
+    runNodeMock.mockReturnValue({ status: 0, stdout: "", stderr: "" });
+    const consumer = makeConsumer();
+
+    checkRequireInterop(consumer, "fixture-package", hasCommand);
+
+    expect(readFileSync(path.join(consumer, "check-require.cjs"), "utf8")).toContain(
+      `.length > 0 || ${String(hasCommand)}`,
     );
   });
 });

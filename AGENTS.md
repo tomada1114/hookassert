@@ -81,10 +81,25 @@ edit is slow enough that it stops being run at all.
 
 ```
 src/
-├── index.ts      # the public contract: the only module consumers can import
-├── cli.ts        # optional command entry; not an import surface
-├── internal/     # private; never re-exported from index.ts
-└── *.ts          # implementation modules, re-exported by name from index.ts
+├── index.ts        # the public contract: the only module consumers can import
+├── types.ts        # the published type vocabulary; declarations, no implementation
+├── cli.ts          # composition root and command entry; not an import surface
+└── internal/       # private; never re-exported from index.ts
+    ├── errors.ts   # HookassertError and the exit-code vocabulary
+    │
+    │   # the static layer — reads only, never spawns a process, never writes a file
+    ├── settings/   # the three-layer concatenating merge, with provenance
+    ├── spec/       # the versioned event/matcher spec and its loader
+    ├── matcher/    # which hooks a given event fires, and why
+    ├── fixture/    # recorded events, loaded from disk
+    ├── decision/   # exit codes and hook JSON, read as the decision vocabulary
+    ├── assert/     # expectations diffed against what actually happened
+    ├── lint/       # rules over hook declarations
+    ├── report/     # pretty, JSON, and GitHub Actions output
+    │
+    │   # the dynamic layer — the only code that spawns or writes
+    ├── exec/       # the executor, its Spawner seam, and the version probe
+    └── record/     # capture-hook insertion and zero-diff restore
 ```
 
 `src/index.ts` is the single consumer-importable entry point of the published contract.
@@ -92,6 +107,24 @@ src/
 is not an import surface. `scripts/*.mjs` is repository automation that never ships.
 What may appear on the import surface, and what a change to it obliges, are the
 `public-api-contract` and `release-impact` skills.
+
+`src/internal/` is split into two layers, and the split is what makes the pipeline safe
+to run against someone's real settings tree. The **static layer** only reads: it never
+spawns a process and never writes a file, so `explain` and `lint` can run over a project
+without touching it. The **dynamic layer** is the only code that runs a hook or edits a
+settings file.
+
+**A static module never imports a dynamic one.** The pipeline flows `settings/` →
+`matcher/` → `assert/` → `report/`, and where it needs a real hook's result it takes
+that result as a parameter rather than reaching for the executor itself. The reverse
+direction is fine: a dynamic module may read the static layer's types. `src/cli.ts` is
+the composition root — the only module allowed to import both layers, and the one place
+they are wired together.
+
+Enforced by: `eslint.config.mjs`'s `boundaries/static-does-not-reach-dynamic`, a
+`no-restricted-imports` zone scoped to the static directories, so a static module that
+reaches into `exec/` or `record/` fails lint rather than review. `changing-gates` owns
+edits to that zone; `tests/boundaries.test.ts` is what proves it is still declared.
 
 ## Skills
 

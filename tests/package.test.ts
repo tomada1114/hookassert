@@ -234,7 +234,7 @@ describe("inspectPackageEntries", () => {
         entry("dist/index.d.ts"),
         entry("dist/index.js.map"),
         entry("dist/index.d.ts.map"),
-        entry("dist/internal/assert.js"),
+        entry("dist/internal/errors.js"),
       ],
       { manifest: SATISFIED_MANIFEST },
     );

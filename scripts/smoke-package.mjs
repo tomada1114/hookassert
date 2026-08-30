@@ -331,10 +331,17 @@ function runInConsumer(consumer, name, source) {
  * evaluating is still caught; one that throws on first call is the package's
  * own test suite's concern.
  *
+ * An entry point may legitimately publish types only, in which case the emitted
+ * module is empty and there is no runtime name to read. That is only usable if
+ * the package ships something else a consumer can run, so `hasCommand` — the
+ * packed manifest's `bin` — is what decides whether an empty module is a
+ * type-only surface or a tarball that publishes nothing at all.
+ *
  * @param {string} consumer - Consumer directory.
  * @param {string} packageName - Installed package name.
  * @param {readonly string[]} subpaths - From {@link publicSubpaths}.
  * @param {boolean} [checkLibrary=true] Whether the packed manifest has exports.
+ * @param {boolean} [hasCommand=false] Whether the packed manifest declares `bin`.
  * @returns {void}
  *
  * @remarks
@@ -347,6 +354,7 @@ export function checkRuntimeImports(
   packageName,
   subpaths,
   checkLibrary = true,
+  hasCommand = false,
 ) {
   if (!checkLibrary) {
     step("skipping library entry-point checks: the package declares no exports");
@@ -367,8 +375,11 @@ for (const subpath of ${JSON.stringify(subpaths)}) {
     \`\${specifier} exposes a default export; the contract is named exports only\`,
   );
   const names = Object.keys(module).filter((name) => name !== "__esModule");
-  assert.ok(names.length > 0, \`\${specifier} exposes no named exports\`);
-  console.log(\`  \${specifier} -> \${names.sort().join(", ")}\`);
+  assert.ok(
+    names.length > 0 || ${JSON.stringify(hasCommand)},
+    \`\${specifier} exposes no named exports, and the package declares no command either\`,
+  );
+  console.log(\`  \${specifier} -> \${names.length > 0 ? names.sort().join(", ") : "(types only)"}\`);
 }
 `,
   );
@@ -377,7 +388,9 @@ for (const subpath of ${JSON.stringify(subpaths)}) {
     fail("ERR_SMOKE_IMPORT_FAILED", {
       what: "A consumer could not import the published entry points.",
       subject: subpaths.map((subpath) => packageName + subpath).join(", "),
-      expected: "every public subpath imports and exposes at least one named export",
+      expected: hasCommand
+        ? "every public subpath imports cleanly and exposes no default export"
+        : "every public subpath imports and exposes at least one named export",
       actual: `exit ${String(result.status)}\n${excerpt(result.stderr || result.stdout)}`,
       next: "Check `exports` in package.json and the re-exports in src/index.ts.",
     });
@@ -472,8 +485,14 @@ export function checkBinCommands(consumer, packageName, manifest) {
  * from `exports` would silently skip the assertion instead of failing it,
  * which is the one outcome this check exists to prevent.
  *
+ * The named-export count is conditional for the same reason it is in
+ * {@link checkRuntimeImports}: a type-only entry point resolves to an empty
+ * namespace, and an empty namespace is a published surface only when the
+ * package ships a command beside it.
+ *
  * @param {string} consumer - Consumer directory.
  * @param {string} packageName - Installed package name.
+ * @param {boolean} [hasCommand=false] Whether the packed manifest declares `bin`.
  * @returns {void}
  *
  * @remarks
@@ -481,7 +500,7 @@ export function checkBinCommands(consumer, packageName, manifest) {
  * directly; see {@link checkRuntimeImports} for why `runNode` is the boundary
  * mocked rather than a real tarball install.
  */
-export function checkRequireInterop(consumer, packageName) {
+export function checkRequireInterop(consumer, packageName, hasCommand = false) {
   step("requiring the package from a CommonJS consumer");
   const result = runInConsumer(
     consumer,
@@ -495,8 +514,8 @@ assert.equal(
   "require() did not return a module namespace; check the exports conditions",
 );
 assert.ok(
-  Object.keys(api).filter((name) => name !== "__esModule").length > 0,
-  "require() returned no named exports; check the exports conditions",
+  Object.keys(api).filter((name) => name !== "__esModule").length > 0 || ${JSON.stringify(hasCommand)},
+  "require() returned no named exports, and the package declares no command either",
 );
 console.log("  require() resolved the package root");
 
@@ -865,9 +884,14 @@ export function main(argv) {
       packageName,
       publicSubpaths(installedManifest),
       readKey(installedManifest, "exports") !== undefined,
+      readKey(installedManifest, "bin") !== undefined,
     );
     checkBinCommands(consumer, packageName, installedManifest);
-    checkRequireInterop(consumer, packageName);
+    checkRequireInterop(
+      consumer,
+      packageName,
+      readKey(installedManifest, "bin") !== undefined,
+    );
     checkTypeScriptConsumers(consumer, packageName);
     checkDeepImportBlocked(
       consumer,

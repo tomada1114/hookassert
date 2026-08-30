@@ -14,7 +14,7 @@ import { describe, expect, it } from "vitest";
 
 import { parseJson, readKey, readString } from "../scripts/lib/json.mjs";
 import { resolveDependencyBin, runNode } from "../scripts/lib/node-tools.mjs";
-import { normalizeIdentifier } from "../src/index.js";
+import { runCli } from "../src/cli.js";
 
 // the `updating-docs` skill requires every documented code example to
 // compile against the *current* public API. Nothing did: a substring
@@ -91,10 +91,11 @@ const JSDOC_THEN_EXPORT =
  * A fixture prepended to one specific documented example, for an identifier
  * the example deliberately leaves free (a reader is expected to supply it) —
  * never a change to the documented example itself.
+ *
+ * Empty today: no documented example leaves an identifier free. The lookup
+ * stays so the next one that does has somewhere to declare it.
  */
-const SNIPPET_FIXTURES = new Map<string, string>([
-  ["withTimeout", "declare const url: string;\n"],
-]);
+const SNIPPET_FIXTURES = new Map<string, string>();
 
 /** Strip a JSDoc comment's leading ` * ` from every line, left over from
  * `/\*\*...\*\/` capturing the comment body verbatim. */
@@ -195,16 +196,23 @@ describe("documented examples compile against the public API", () => {
   );
 });
 
-describe("README quick start", () => {
-  it("matches runtime behavior", () => {
-    const result = normalizeIdentifier("Hello World");
-    expect(result).toBe("hello-world");
-    // The "documented examples compile" suite above only type-checks this
-    // snippet — a `// => "..."` comment is inert to tsc. Compare the
-    // annotation against the real, current output here, so a stale or
-    // typo'd claimed result still fails loudly.
+describe("README's command list", () => {
+  // The suite above type-checks the documented *types*; the commands are the
+  // other half of what a reader is promised, and nothing type-checks prose.
+  // The usage text is the source of truth — the README is a copy of it that
+  // Prettier will happily keep formatting long after it stopped being true.
+  const usage = runCli(["--help"], packageName).stdout;
+  const commands = [...usage.matchAll(/^ {2}([a-z]+) {2,}\S/gm)].map(
+    (match) => match[1] ?? "",
+  );
+
+  it("found the command list in the usage text", () => {
+    expect(commands).not.toEqual([]);
+  });
+
+  it.each(commands)("documents the %s command", (name) => {
     const readme = readFileSync(path.join(repoRoot, "README.md"), "utf8");
-    expect(readme).toContain(`// => ${JSON.stringify(result)}`);
+    expect(readme).toContain(`${packageName} ${name}`);
   });
 });
 
