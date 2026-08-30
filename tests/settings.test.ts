@@ -573,3 +573,18 @@ describe("Provenance.offset", () => {
     expect(hook?.provenance.offset).toBe(expectedOffset);
   });
 });
+
+describe("a matcher written as a JSON array disables every hook in that settings file", () => {
+  it("throws SettingsParseError and yields zero hooks from the whole file, not just the bad one", () => {
+    let caught: unknown;
+    try {
+      loadSettings([source("array-matcher-disables-file", "project.json", "project")]);
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(SettingsParseError);
+    expect((caught as SettingsParseError).code).toBe("ERR_SETTINGS_PARSE");
+    expect((caught as SettingsParseError).exitCode).toBe(5);
+  });
+});
