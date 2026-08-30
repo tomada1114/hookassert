@@ -1,0 +1,45 @@
+# Single-package repository: no `packages:` globs on purpose.
+#
+# This file exists so the pnpm supply-chain policy below is declared in one
+# machine-readable place, reviewable in a diff, and applied to every install
+# (local, CI, and release) without relying on per-developer configuration.
+
+# Reproduce the pnpm version resolved in pnpm-lock.yaml when the local pnpm
+# does not satisfy devEngines.packageManager, instead of failing the install.
+pmOnFail: download
+
+# Refuse to run a script against a node_modules that no longer matches the
+# lockfile, instead of letting a gate pass against stale dependencies.
+verifyDepsBeforeRun: error
+
+# Supply-chain cooldown: refuse dependency versions published less than 7 days
+# (10080 minutes) ago, so a compromised or broken release has time to be found
+# before it can enter this project.
+minimumReleaseAge: 10080
+# Apply the cooldown to every version, including ones already in the lockfile.
+minimumReleaseAgeStrict: true
+# Fail closed when registry metadata has no publish time rather than assuming
+# the version is old enough.
+minimumReleaseAgeIgnoreMissingTime: false
+
+# Reject dependencies whose provenance / trusted-publisher level regressed
+# compared to a previously resolved version.
+trustPolicy: no-downgrade
+# Never trust the trust metadata recorded in a lockfile a contributor produced
+# under a weaker policy; re-verify against the registry.
+trustLockfile: false
+# Refuse transitive dependencies fetched from git or arbitrary tarball URLs.
+blockExoticSubdeps: true
+
+# Unmet or conflicting peer ranges are errors, not warnings.
+strictPeerDependencies: true
+# Fail the install when a dependency wants to run a lifecycle script that is
+# not explicitly allowed below.
+strictDepBuilds: true
+
+# Install-script allowlist. Every entry is a reviewed exception: adding one is
+# a security-sensitive change and needs the same scrutiny as a new dependency.
+allowBuilds:
+  # lefthook ships a postinstall that downloads/links its Go binary; that is
+  # the whole point of depending on it for Git hooks.
+  lefthook: true

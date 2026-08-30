@@ -1,0 +1,46 @@
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    # Matches `minimumReleaseAge: 10080` in pnpm-workspace.yaml: a version pnpm
+    # would refuse to install must not arrive as a PR either. Dependabot lifts
+    # this for security updates, which is the intended exception — a human
+    # still reviews the diff.
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "deps:"
+    open-pull-requests-limit: 10
+    # A TypeScript major is not installable here: typescript-eslint and typedoc
+    # cap their peer range below it, and `strictPeerDependencies: true` turns
+    # that into a failed install rather than a warning. See "TypeScript version
+    # ceiling" in AGENTS.md. Remove this entry once both of those packages
+    # publish a peer range that admits the next major.
+    ignore:
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+    groups:
+      # Routine updates arrive as one reviewable PR. Majors are deliberately
+      # left out of every group so each gets its own PR and is reviewed against
+      # its own migration note (spec 02 §6.3).
+      npm-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "ci:"
+    open-pull-requests-limit: 10
+    groups:
+      # Dependabot rewrites the pinned SHA and the trailing release-tag comment
+      # together, which is how the pins in .github/workflows stay current.
+      actions-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]

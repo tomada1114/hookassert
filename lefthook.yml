@@ -1,0 +1,87 @@
+# Local Git hooks.
+#
+# Every job runs a package script, or the very executable and flags that a
+# package script runs, so the same change can never pass here and fail
+# `pnpm check:quick` or CI. Nothing in this file defines a rule of its own:
+# ESLint's config, Prettier's config and `package.json` stay the single sources
+# of truth, and this file only narrows *what* they look at.
+#
+# This is the one enforcement layer that fires for every author — a human, an
+# agent, or any other tool — because it runs on `git commit` itself rather
+# than inside a particular editor or CLI. There is no separate AI-specific
+# hook layer: an agent's dangerous commands are covered by its own permission
+# model (see AGENTS.md's "Enforcement layers"), and the everyday discipline of
+# keeping the tree formatted and typechecked belongs here instead, where it
+# also catches a human or a differently-tooled agent.
+#
+# Install with `pnpm hooks:install`.
+
+pre-commit:
+  # A merge or rebase replays commits that already passed these checks.
+  skip:
+    - merge
+    - rebase
+  jobs:
+    # Formatting is applied and re-staged, so "always formatted" holds without
+    # anyone remembering to run `pnpm fix`. Runs alone, before the parallel
+    # group below: eslint and typecheck must see the formatted content, not
+    # the pre-format one. Caveat — `stage_fixed` re-stages a reformatted file
+    # with a plain `git add`, which stages the file *whole*. So on a
+    # partially-staged file (`git add -p`) that Prettier rewrites, the unstaged
+    # hunks are swept into the commit too — their content, not merely their
+    # formatting. Unlike lint-staged, lefthook does not stash the unstaged half
+    # first. Commit a partial stage of an already-formatted file, or stash the
+    # rest before committing.
+    - name: format
+      run: pnpm exec prettier --write --ignore-unknown {staged_files}
+      stage_fixed: true
+
+    - name: checks
+      group:
+        parallel: true
+        jobs:
+          # Same flags as `pnpm run lint`, narrowed to the files being
+          # committed. No `--fix`: a lint violation that survives formatting
+          # is a real problem, and blocking the commit is the point — fix it
+          # by hand or with `pnpm fix`, not by loosening this. `--no-warn-ignored`
+          # keeps a generated file that happens to be staged from failing the
+          # run on a warning about being out of scope.
+          - name: eslint
+            glob: "*.{ts,mts,cts,js,mjs,cjs}"
+            run: pnpm exec eslint --max-warnings 0 --no-warn-ignored {staged_files}
+
+          # Type-checks the whole program, not only the staged files — a
+          # change in one file routinely breaks a type in another that this
+          # commit does not touch. Cheap enough (~2s) to run on every commit
+          # that touches code.
+          - name: typecheck
+            glob: "*.{ts,mts,cts,js,mjs,cjs}"
+            run: pnpm run typecheck
+
+          # Only the test files reachable from the staged files' module
+          # graph, not the whole suite — CI runs the full suite on every
+          # push. No glob: unlike eslint/typecheck this needs to see every
+          # staged path itself to decide what is related, including a staged
+          # test file with no production-code counterpart.
+          - name: test:related
+            run: pnpm run test:related {staged_files}
+
+          # Content-based checks git itself can see: a credential in a staged
+          # file, a quality gate stripped out of a gate file, a staged
+          # deletion of one, an .env*/secrets/** file about to be committed.
+          # No glob: this is the layer that must see every staged file,
+          # whatever its extension — see scripts/check-staged.mjs's header
+          # for what it does and does not cover. Runs after `format` above,
+          # not in parallel with it, because it reads the git index and must
+          # see the re-staged (formatted) blobs, not the pre-format ones.
+          - name: check:staged
+            run: pnpm run check:staged
+
+          # `.claude/skills/` is a generated copy of `.agents/skills/`, and a
+          # commit that changes either side without the other leaves Claude
+          # Code and Codex CLI reading different instructions. The glob keeps
+          # this off every commit that touches neither tree; the same check
+          # runs from `pnpm test` for everyone else.
+          - name: agents:check
+            glob: "{.agents/skills/**,.claude/skills/**}"
+            run: pnpm run agents:check

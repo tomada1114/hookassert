@@ -1,0 +1,70 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "noUncheckedSideEffectImports": true,
+    "noImplicitReturns": true,
+    "useUnknownInCatchVariables": true,
+    // Forbids the syntax Node's type stripping cannot erase — enum, namespace,
+    // parameter properties — so every source file stays runnable unbuilt.
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "forceConsistentCasingInFileNames": true,
+    "allowUnreachableCode": false,
+    "allowUnusedLabels": false,
+    "skipLibCheck": true,
+    // Closes the path where a package in node_modules substitutes its own
+    // standard library for TypeScript's built-in lib files.
+    "libReplacement": false,
+    "noEmit": true,
+
+    // Repository automation (bootstrap, package checks, agent skills) must run
+    // on plain Node before `pnpm install`, so it is authored as `.mjs`.
+    // Checking those files here is what makes "typecheck covers scripts" true.
+    "allowJs": true,
+    "checkJs": true
+  },
+  "include": [
+    "src",
+    "tests",
+    "scripts",
+    ".agents/skills",
+    ".claude/skills",
+    "*.ts",
+    "*.mts",
+    "*.mjs"
+  ],
+  // `.claude/skills/` is a generated, committed mirror of `.agents/skills/`
+  // (`pnpm agents:sync`): every skill lives at `.claude/skills/<name>/...`,
+  // one full subdirectory per skill, with no hand-maintained list anywhere
+  // (scripts/sync-agents.mjs walks `.agents/skills/` dynamically). Type-
+  // checking both copies of a byte-identical mirrored file reports the same
+  // diagnostic twice, at a path nobody may edit, so this glob excludes
+  // anything *nested inside* an immediate subdirectory of `.claude/skills/`
+  // -- for every skill, present or future, without naming one -- while still
+  // type-checking a hypothetical Codex-only file added directly under
+  // `.claude/skills/` itself (outside any subdirectory) -- unlike
+  // eslint.config.mjs's globalIgnores and .prettierignore, which ignore the
+  // whole `.claude/skills/` tree and do not draw that distinction.
+  //
+  // The exact shape matters: `.claude/skills/*/**` (a single `*` segment
+  // followed by `/**`) was tried first and rejected -- empirically, via
+  // `tsc --showConfig`/`ts.parseJsonConfigFileContent`, it also swallows a
+  // bare top-level file directly under `.claude/skills/` (behaving like the
+  // bare `.claude/skills/**`), which would violate the invariant above.
+  // `.claude/skills/*/**/*` requires at least one path segment *after* the
+  // subdirectory name, so it only matches paths nested inside a subdirectory
+  // and never a file sitting directly in `.claude/skills/`.
+  //
+  // A `tests/fixtures/` file is malformed on purpose, so type-checking it
+  // reports the very defect a test asserts on.
+  "exclude": [".claude/skills/*/**/*", "tests/fixtures/**"]
+}

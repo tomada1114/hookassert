@@ -1,0 +1,33 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "noEmit": false,
+    "declaration": true,
+    "sourceMap": true,
+
+    // `src/` is deliberately kept out of the tarball, so a map that only
+    // referenced `../src/*.ts` would resolve to nothing for a consumer.
+    // Embedding the sources makes every published map self-contained.
+    "inlineSources": true,
+
+    // Off because TypeScript honours `inlineSources` for `.js.map` only: a
+    // `.d.ts.map` always references `../src/*.ts` by path, so every one of them
+    // would ship dangling. `check-package.mjs` enforces that as an invariant.
+    "declarationMap": false,
+    "isolatedDeclarations": true,
+
+    // The published artifact is TypeScript output only; repository automation
+    // never ships.
+    "allowJs": false,
+    "checkJs": false,
+
+    // The node-library profile may use `node:` builtins in src. The universal
+    // profile replaces this with `"types": []` so a Node-only import fails the
+    // build instead of silently narrowing where the package can run.
+    "types": ["node"]
+  },
+  "include": ["src"],
+  "exclude": ["tests", "scripts", "**/*.test.ts"]
+}

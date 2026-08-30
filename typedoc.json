@@ -1,0 +1,29 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+
+  // Documentation covers exactly what `src/index.ts` re-exports, using the
+  // build config so `src/internal/` and the test-only surface stay out.
+  // `docs/api/` is generated and gitignored; `docs/*.md` is hand-written.
+  "entryPoints": ["src/index.ts"],
+  "tsconfig": "tsconfig.build.json",
+  "out": "docs/api",
+
+  // Stating the revision and the link template keeps this gate independent of
+  // git state: TypeDoc would otherwise probe the `origin` remote and warn when
+  // it is missing, which fails the build below in a fresh clone or in a
+  // bootstrapped directory that has no remote yet. Source links still resolve
+  // wherever git is available, and are simply omitted where it is not.
+  "gitRevision": "main",
+  "sourceLinkTemplate": "https://github.com/your-name/my-package/blob/{gitRevision}/{path}#L{line}",
+
+  "treatWarningsAsErrors": true,
+  "validation": {
+    // A public symbol whose type references something unexported leaves a
+    // consumer unable to name that type.
+    "notExported": true,
+    "invalidLink": true,
+    "rewrittenLink": true,
+    "notDocumented": true,
+    "unusedMergeModuleWith": true
+  }
+}

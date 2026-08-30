@@ -1,0 +1,32 @@
+[files]
+extend-exclude = [
+  # Generated file. A typo in a package name is upstream's, and rewriting it
+  # here would invalidate the lockfile.
+  "pnpm-lock.yaml",
+  # Generated build/doc output, matching the same paths in .gitignore,
+  # eslint.config.mjs's globalIgnores, and .prettierignore.
+  "dist/",
+  "coverage/",
+  "docs/api/",
+  # Data under test. Unlike the generated trees above this one is committed on
+  # purpose, and a string misspelled on purpose is the point of the fixture.
+  "tests/fixtures/",
+  # Generated mirror of .agents/skills/ (`pnpm agents:sync`); the real files
+  # are spell-checked at their real path, and checking the copy too would
+  # report the same typo twice, at a path nobody may edit.
+  ".claude/skills/",
+]
+
+# Each entry below is a word that is spelled the way it is on purpose. Prefer
+# fixing the text over adding to these lists.
+[default.extend-identifiers]
+# Deliberately misspelled in tests/types.test.ts, where the point is that an
+# unknown option is a type error rather than an extension point.
+seperator = "seperator"
+
+[default.extend-words]
+# Node.js v22's LTS codename.
+Jod = "Jod"
+# normalizeIdentifier documents that "café" becomes "caf". That string is the
+# function's output, not a misspelling of "calf".
+caf = "caf"

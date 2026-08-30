@@ -1,0 +1,36 @@
+name: Dependency review
+
+on:
+  pull_request:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dependency-review:
+    name: Review new dependencies
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Fails the PR when it introduces a dependency with a known advisory or a
+      # license outside the allowlist. Complements the pnpm-workspace.yaml
+      # policy, which gates *how* a dependency may be fetched and built rather
+      # than *what* it is.
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: moderate
+          # Copyleft licenses are denied rather than the permissive set being
+          # allowed, so an unrecognised-but-permissive license does not block a
+          # PR on a template nobody has configured yet.
+          deny-licenses: AGPL-3.0, GPL-2.0, GPL-3.0, LGPL-2.1, LGPL-3.0, SSPL-1.0
+          # No `comment-summary-in-pr`: it needs `pull-requests: write`, which a
+          # fork PR's token does not have. The job log is the report.

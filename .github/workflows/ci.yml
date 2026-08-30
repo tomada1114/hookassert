@@ -1,0 +1,177 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Nothing is inherited: every job below re-declares the scopes it needs.
+permissions: {}
+
+concurrency:
+  # Superseding a pull request cancels its previous run. A push to main is
+  # keyed by commit instead, so consecutive merges neither cancel one another
+  # nor discard the CI record of the commit that already landed.
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  static:
+    name: Static checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Package scripts call pnpm recursively, so CI installs the reviewed
+      # version on PATH. No `version:` input on purpose: the action reads the
+      # exact `packageManager` string from package.json, which is the single
+      # place that version is written. tests/workflows.test.ts fails if a
+      # workflow starts stating one again.
+      #
+      # It also has to run *before* setup-node: setup-node's default
+      # package-manager cache resolves the pnpm store path by invoking pnpm,
+      # and pnpm is only on PATH once this step has run.
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check formatting
+        run: pnpm run format:check
+
+      - name: Lint
+        run: pnpm run lint
+
+      - name: Type check
+        run: pnpm run typecheck
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Build the documentation
+        run: pnpm run docs:build
+
+  test:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The single source of coverage: it is collected exactly once across the
+      # whole workflow.
+      - name: Run tests with coverage
+        if: matrix.os == 'ubuntu-latest'
+        run: pnpm run test:coverage
+
+      - name: Run tests without coverage
+        if: matrix.os != 'ubuntu-latest'
+        run: pnpm run test
+
+  package:
+    name: Package artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Builds and packs once, then runs publint, Are the Types Wrong?, and the
+      # install/runtime/type/deep-import smoke checks against that exact file.
+      - name: Verify the publishable package
+        run: pnpm run package:check
+
+  package-floor:
+    name: Package smoke at the published Node floor
+    needs: package
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Source work and the dependency install stay on the development runtime.
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build and pack the artifact on the development runtime
+        run: |
+          set -euo pipefail
+          pnpm run build
+          node scripts/clean.mjs .smoke
+          pnpm pack --pack-destination .smoke
+
+      # This line is rewritten by bootstrap for a chosen --node-engines >=N.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24 # bootstrap-node-floor
+
+      - name: Consume the packed artifact at the published Node floor
+        run: pnpm --config.runtime-on-fail=ignore run package:smoke -- --pack-dir .smoke
+
+  # template-only:start
+  bootstrap:
+    name: Bootstrap generated repositories
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: Verify bootstrap transformations
+        run: node scripts/verify-bootstrap.mjs
+  # template-only:end

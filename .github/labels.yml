@@ -1,0 +1,62 @@
+# The single declarative source for this repository's labels: name, colour,
+# and description. `pnpm repo:labels` (scripts/sync-labels.mjs) creates or
+# updates each one on the live repository; it never deletes a label this file
+# does not mention. See the `triaging-issues` skill for what each
+# label means and how triage uses it.
+#
+# Colours are 6 lowercase hex digits, no leading `#` — GitHub's label YAML
+# convention (see e.g. `gh label create --color`).
+
+# Type labels: what kind of change or work an issue is. Also used by
+# .github/ISSUE_TEMPLATE/*.yml's `labels:` field.
+- name: bug
+  color: d73a4a
+  description: "Reproducible incorrect behavior."
+- name: enhancement
+  color: a2eeef
+  description: "A consumer-visible improvement."
+- name: documentation
+  color: 0075ca
+  description: "A documentation-only change."
+- name: chore
+  color: fef2c0
+  description: "Repository work: tooling, automation, refactor, hardening, or docs."
+- name: security
+  color: 5319e7
+  description: "A vulnerability or a security-relevant defect."
+
+# Priority labels: added at triage, ranking impact on the rest of the backlog
+# rather than how interesting the work is.
+- name: "priority: P0"
+  color: b60205
+  description: "Ship now: other issues are blocked on it, or damage is being taken."
+- name: "priority: P1"
+  color: d93f0b
+  description: "Do next: leverage work later issues stand on (CI, schema, shared types, config)."
+- name: "priority: P2"
+  color: fbca04
+  description: "Normal: a real, self-contained change; nothing waits on it."
+- name: "priority: P3"
+  color: c5def5
+  description: "Defer: nice-to-have, docs polish, or cosmetics."
+
+# Blocked / on-hold labels: why an issue is not implementable yet.
+- name: "blocked: design"
+  color: e99695
+  description: "The approach is not settled; needs a human decision first."
+- name: "blocked: dependency"
+  color: f9d0c4
+  description: "Waits on a specific open issue named by a Depends on: #N line."
+- name: "on hold"
+  color: cccccc
+  description: "Not implementable as filed, or parked pending something outside the tracker."
+
+# Changelog-only labels: used by .github/release.yml's categories and applied
+# by .github/workflows/pr-label.yml from a PR's Conventional Commit type.
+# Never used for issue triage.
+- name: dependencies
+  color: 0366d6
+  description: "A dependency version bump."
+- name: ci
+  color: 006b75
+  description: "A CI or workflow-only change."

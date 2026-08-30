@@ -1,0 +1,50 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tgz
+
+# Test and coverage output
+coverage/
+
+# Scratch directories used by the package gates. A successful full check
+# removes .package, while a focused smoke failure retains its exact tarball
+# for inspection. `pnpm clean` removes them all.
+.package/
+.smoke/
+.attw/
+
+# Generated API documentation. Anything else under docs/ is hand-written and
+# tracked.
+docs/api/
+
+# Tool caches
+.eslintcache
+*.tsbuildinfo
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Claude Code: personal overrides stay local, shared config is tracked
+.claude/settings.local.json
+# Claude Code: agent worktrees are full checkouts, never part of this one
+.claude/worktrees/
+
+# Environment variables (example files are tracked on purpose)
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db

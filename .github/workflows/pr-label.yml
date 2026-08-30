@@ -1,0 +1,54 @@
+name: Label PR
+
+on:
+  pull_request:
+    types: [opened, reopened, edited, synchronize]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  label:
+    name: Label by Conventional Commit type
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      # The one job in this repository that writes anything. It writes a label
+      # and nothing else, and a fork PR's token cannot even do that — see the
+      # fallback below. `pull_request` (never `pull_request_target`) is used, so
+      # no fork code runs with this token.
+      pull-requests: write # to add one label to the pull request
+    steps:
+      - name: Apply the label matching the PR title type
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          # Read through the environment, never interpolated into the script:
+          # a PR title is attacker-controlled text.
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          set -euo pipefail
+          type="${PR_TITLE%%:*}"
+          type="${type%%(*}"
+          case "$type" in
+            feat) label=enhancement ;;
+            fix) label=bug ;;
+            docs) label=documentation ;;
+            chore) label=chore ;;
+            ci) label=ci ;;
+            deps) label=dependencies ;;
+            *) echo "No label mapping for type: $type"; exit 0 ;;
+          esac
+          # Labels are declared in .github/labels.yml and created/updated ahead
+          # of time by `pnpm repo:labels` (scripts/sync-labels.mjs), run
+          # manually by a maintainer — this job only applies one, it never
+          # creates one.
+          # Best effort: never fail the check over a label. A fork PR's
+          # read-only token is one reason this can fail; a label that has not
+          # been synced yet (`pnpm repo:labels`) is another.
+          gh pr edit "$PR_NUMBER" --add-label "$label" \
+            || echo "::notice::Could not apply label '$label' (missing on the repository, or a fork PR's read-only token)."
