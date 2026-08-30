@@ -20,13 +20,18 @@
  */
 
 export type {
+  CaseResult,
   Decision,
   EventName,
   ExecOutcome,
+  ExpectationDiff,
+  NonFiringExplanation,
   PayloadOrigin,
   Provenance,
+  RejectedMatch,
   ResolvedHook,
   SettingsLayer,
+  Summary,
   UnknownReason,
   VersionSourceName,
 } from "./types.js";

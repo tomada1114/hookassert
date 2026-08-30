@@ -348,3 +348,211 @@ export type Decision =
       /** Every reason nothing more specific could be asserted. */
       readonly reasons: readonly [UnknownReason, ...UnknownReason[]];
     };
+
+/**
+ * A structured comparison between one field of a fixture case's declared
+ * `expect` and what was actually observed, produced by `assertCase`
+ * (`src/internal/assert/`).
+ *
+ * @remarks
+ * Each member carries the expected and actual value for exactly one field of
+ * a fixture case's `expect`, in enough structured detail for a reporter to
+ * render text like "expected deny / actual pass — the hook fired but exited
+ * 0" without this type ever holding a pre-rendered string itself — rendering
+ * that text is a reporter's job (`src/internal/report/`), not this type's.
+ *
+ * @public
+ */
+export type ExpectationDiff =
+  | {
+      /** Whether any hook fired at all disagreed with `expect.fires`. */
+      readonly field: "fires";
+      /** The fixture's declared `expect.fires`. */
+      readonly expectedFires: boolean;
+      /** Whether a hook actually fired. */
+      readonly actualFires: boolean;
+    }
+  | {
+      /** The resolved `Decision.kind` disagreed with `expect.decision`. */
+      readonly field: "decision";
+      /** The fixture's declared `expect.decision`. */
+      readonly expectedDecision: Decision["kind"];
+      /** The actually resolved `Decision.kind`. */
+      readonly actualDecision: Decision["kind"];
+    }
+  | {
+      /** The resolved `Decision`'s exit code disagreed with `expect.exitCode`. */
+      readonly field: "exitCode";
+      /** The fixture's declared `expect.exitCode`. */
+      readonly expectedExitCode: number;
+      /** The actually resolved `Decision`'s exit code. */
+      readonly actualExitCode: number;
+    }
+  | {
+      /** The hook's stdout did not contain `expect.stdoutContains`. */
+      readonly field: "stdoutContains";
+      /** The fixture's declared `expect.stdoutContains`. */
+      readonly expectedSubstring: string;
+      /** The hook's actual stdout. */
+      readonly actualStdout: string;
+    }
+  | {
+      /** The hook's stderr did not contain `expect.stderrContains`. */
+      readonly field: "stderrContains";
+      /** The fixture's declared `expect.stderrContains`. */
+      readonly expectedSubstring: string;
+      /** The hook's actual stderr. */
+      readonly actualStderr: string;
+    }
+  | {
+      /** Whether the hook timed out disagreed with `expect.timedOut`. */
+      readonly field: "timedOut";
+      /** The fixture's declared `expect.timedOut`. */
+      readonly expectedTimedOut: boolean;
+      /** Whether the hook actually timed out. */
+      readonly actualTimedOut: boolean;
+    };
+
+/**
+ * One hook that was a matcher candidate for a case's event but did not fire,
+ * paired with the reason the matcher engine rejected it.
+ *
+ * @public
+ */
+export interface RejectedMatch {
+  /** The hook that did not fire. */
+  readonly hook: ResolvedHook;
+  /** Why the matcher engine did not fire it. */
+  readonly reason: string;
+}
+
+/**
+ * Why a fixture case's `expect.fires: true` was not met.
+ *
+ * @remarks
+ * `"matcher-did-not-match"` — at least one candidate hook was declared under
+ * the case's event, but every one of them was rejected by the matcher.
+ * `"no-hook-configured"` — no hook at all is declared under the case's
+ * event, in any settings layer the fixture loaded.
+ * `"excluded-settings-layer"` — a hook that would otherwise be a candidate
+ * exists, but only in a settings layer the fixture's `settings:` list did
+ * not include.
+ *
+ * These three are kept distinct rather than collapsed into one generic "did
+ * not fire" message, so a reporter can point at the actual cause: a matcher
+ * to fix, a hook to add, or a fixture's `settings:` list to extend.
+ *
+ * @public
+ */
+export type NonFiringExplanation =
+  | {
+      /** At least one candidate hook was declared under the event, but every one of them was rejected by the matcher. */
+      readonly kind: "matcher-did-not-match";
+      /** Every candidate hook the matcher rejected, and why. */
+      readonly hooks: readonly RejectedMatch[];
+    }
+  | {
+      /** No hook at all is declared under the case's event, in any settings layer the fixture loaded. */
+      readonly kind: "no-hook-configured";
+      /** The event with no hook declared under it at all. */
+      readonly event: EventName;
+    }
+  | {
+      /** A hook that would otherwise be a candidate exists only in a settings layer the fixture's `settings:` list did not include. */
+      readonly kind: "excluded-settings-layer";
+      /** Hooks that would be candidates, declared in an excluded settings layer. */
+      readonly hooks: readonly ResolvedHook[];
+    };
+
+/**
+ * The comparison between one fixture case's declared `expect` and what
+ * actually happened, produced by `assertCase` (`src/internal/assert/`).
+ *
+ * @remarks
+ * `unknown`'s `reasons` is a non-empty tuple for the same reason
+ * `Decision.unknown.reasons` is: an `unknown` `CaseResult` without at least
+ * one {@link UnknownReason} cannot be constructed, at the type level, by any
+ * call site.
+ *
+ * @public
+ */
+export type CaseResult =
+  | {
+      /** Every declared expectation was met. */
+      readonly kind: "pass";
+      /** Where the case's input payload came from. */
+      readonly origin: PayloadOrigin;
+    }
+  | {
+      /** At least one declared expectation was not met. */
+      readonly kind: "fail";
+      /** Where the case's input payload came from. */
+      readonly origin: PayloadOrigin;
+      /**
+       * Every expectation field that disagreed with what was observed.
+       * Non-empty whenever `nonFiring` (on this same result) is `undefined`.
+       */
+      readonly diffs: readonly ExpectationDiff[];
+      /**
+       * Set when the failure is that `expect.fires: true` was declared but
+       * no hook fired; `undefined` when the failure is instead a `diffs`
+       * mismatch (on this same result) on a hook that did fire.
+       */
+      readonly nonFiring: NonFiringExplanation | undefined;
+    }
+  | {
+      /**
+       * The resolved `Decision` could not be asserted with confidence;
+       * `reasons` is a non-empty tuple, so an `unknown` without at least one
+       * {@link UnknownReason} cannot be constructed, at the type level, by
+       * any call site.
+       */
+      readonly kind: "unknown";
+      /** Where the case's input payload came from. */
+      readonly origin: PayloadOrigin;
+      /** Every reason nothing more specific could be asserted. */
+      readonly reasons: readonly [UnknownReason, ...UnknownReason[]];
+    }
+  | {
+      /** The case declared nothing to compare, so it was skipped rather than asserted or left `unknown`. */
+      readonly kind: "skipped";
+      /** Where the case's input payload came from. */
+      readonly origin: PayloadOrigin;
+      /**
+       * `"dry-run"` — the case declared `dryRun: true`, so nothing was run.
+       * `"stub-only"` — the case declares only stubs and no expectation at
+       * all, so there is nothing to compare.
+       */
+      readonly reason: "dry-run" | "stub-only";
+    };
+
+/**
+ * The fold of every `CaseResult` from one or more fixture files into the
+ * counts every reporter prints, produced by `summarize`
+ * (`src/internal/assert/`).
+ *
+ * @remarks
+ * Every reporter (`pretty`, and the future `json`/`github`) renders this
+ * shape as-is; none of them re-derives or re-counts anything on its own —
+ * this is what keeps a summary line like "asserted N cases (M from recorded
+ * payloads), K unknown" honest: it interpolates {@link Summary.asserted},
+ * {@link Summary.fromRecorded} and {@link Summary.unknown} directly, rather
+ * than a value any reporter computed independently.
+ *
+ * `asserted` and `fromRecorded` count only `"pass"` and `"fail"` results —
+ * a `"unknown"` or `"skipped"` `CaseResult` never contributes to either.
+ *
+ * @public
+ */
+export interface Summary {
+  /** Count of `"pass"` plus `"fail"` results. */
+  readonly asserted: number;
+  /** Subset of {@link Summary.asserted} whose origin is `"recorded"`. */
+  readonly fromRecorded: number;
+  /** Count of `"fail"` results — a subset of {@link Summary.asserted}. */
+  readonly failed: number;
+  /** Count of `"unknown"` results. */
+  readonly unknown: number;
+  /** Count of `"skipped"` results. */
+  readonly skipped: number;
+}
