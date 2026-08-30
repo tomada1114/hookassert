@@ -28,7 +28,7 @@ import {
   loadSettings,
 } from "./internal/settings/index.js";
 import { loadSpecFile, parseClaudeVersion } from "./internal/spec/index.js";
-import { createUnimplementedSpawner, type Spawner } from "./internal/spawner.js";
+import { createUnimplementedSpawner, type Spawner } from "./internal/exec/spawner.js";
 import type { EventName } from "./types.js";
 
 export interface CliResult {
@@ -183,7 +183,7 @@ export interface CliDeps {
 
   /**
    * The command-execution seam. `explain` and `lint` accept it but never
-   * call it — see `src/internal/spawner.ts`'s own remark — so a
+   * call it — see `src/internal/exec/spawner.ts`'s own remark — so a
    * `CountingSpawner` injected here is how `tests/cli.test.ts` proves the
    * zero-spawn guarantee mechanically rather than by inspection.
    */
@@ -361,7 +361,7 @@ function runExplain(args: readonly string[], deps: CliDeps): CliResult {
  * @param deps Dependencies to override; anything omitted falls back to the
  * live process (`process.cwd()`, `os.homedir()`, `process.env`) or, for
  * `spawner`, a placeholder that rejects every call — see
- * `src/internal/spawner.ts`.
+ * `src/internal/exec/spawner.ts`.
  * @returns The process result a caller should observe.
  */
 export function runCli(

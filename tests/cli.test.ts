@@ -4,11 +4,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 
 import { isMain, main, runCli, type CliDeps } from "../src/cli.js";
-import { createUnimplementedSpawner } from "../src/internal/spawner.js";
-import type { Spawner, SpawnRequest } from "../src/internal/spawner.js";
+import { createUnimplementedSpawner } from "../src/internal/exec/spawner.js";
+import type { Spawner, SpawnRequest } from "../src/internal/exec/spawner.js";
 import type { ExecOutcome } from "../src/types.js";
 
-// Reaching src/internal/spawner.ts directly (rather than through
+// Reaching src/internal/exec/spawner.ts directly (rather than through
 // src/index.ts's exports, per the writing-tests skill) is a deliberate,
 // narrowly scoped exception: explain's zero-spawn guarantee can only be
 // proven by injecting a real `Spawner` implementation into its dependency
