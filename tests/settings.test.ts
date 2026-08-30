@@ -9,8 +9,10 @@ import {
   discoverSources,
   hooksForEvent,
   loadSettings,
+  mergeSources,
 } from "../src/internal/settings/index.js";
 import type {
+  RawHook,
   ResolvedSettings,
   SettingsSource,
 } from "../src/internal/settings/types.js";
@@ -111,7 +113,9 @@ describe("loadSettings: the concatenating merge", () => {
     const [hook] = settings.hooks;
     // The surviving entry is the first occurrence in layer order (project).
     expect(hook?.provenance.layer).toBe("project");
-    expect(hook?.dedupeKey).toBe("PermissionRequest::Bash::./scripts/confirm.sh");
+    expect(hook?.dedupeKey).toBe(
+      JSON.stringify(["PermissionRequest", "Bash", "./scripts/confirm.sh"]),
+    );
 
     // Stable: reloading the same sources yields the identical key.
     const reloaded = loadSettings([
@@ -119,6 +123,49 @@ describe("loadSettings: the concatenating merge", () => {
       source("duplicate-hook-across-layers", "local.json", "local"),
     ]);
     expect(reloaded.hooks[0]?.dedupeKey).toBe(hook?.dedupeKey);
+  });
+
+  it("does not collapse two distinct declarations whose args contain the dedupe key's own separator", () => {
+    // A plain "::"-joined key would make ["a::b"] indistinguishable from
+    // ["a", "b"] once concatenated, silently dropping the second hook as a
+    // false-positive duplicate.
+    const provenance = {
+      file: fixturePath("project-only", "project.json"),
+      layer: "project" as const,
+      line: 1,
+      col: 1,
+      offset: 0,
+    };
+    const rawHookWithMergedArg: RawHook = {
+      event: "PreToolUse",
+      matcher: "Bash",
+      command: "echo",
+      args: ["a::b"],
+      timeoutMs: undefined,
+      provenance,
+    };
+    const rawHookWithSplitArgs: RawHook = {
+      event: "PreToolUse",
+      matcher: "Bash",
+      command: "echo",
+      args: ["a", "b"],
+      timeoutMs: undefined,
+      provenance,
+    };
+
+    const merged = mergeSources([
+      {
+        source: { path: provenance.file, layer: "project" },
+        hooks: [rawHookWithMergedArg],
+      },
+      {
+        source: { path: provenance.file, layer: "project" },
+        hooks: [rawHookWithSplitArgs],
+      },
+    ]);
+
+    expect(merged.hooks).toHaveLength(2);
+    expect(merged.hooks[0]?.dedupeKey).not.toBe(merged.hooks[1]?.dedupeKey);
   });
 
   it("hooksForEvent returns hooks in a deterministic, documented order (user, then project, then local, then explicit)", () => {

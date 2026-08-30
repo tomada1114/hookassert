@@ -31,8 +31,6 @@ const LAYER_ORDER: Readonly<Record<SettingsLayer, number>> = {
   explicit: 3,
 };
 
-const DEDUPE_KEY_SEPARATOR = "::";
-
 /**
  * The key two hook declarations must share to be treated as the same
  * handler.
@@ -43,10 +41,17 @@ const DEDUPE_KEY_SEPARATOR = "::";
  * one entry (the first occurrence's own timeout is kept; see mergeSources).
  * Opaque to a caller: explain displays this value verbatim, but nothing
  * outside this module should parse it back apart.
+ *
+ * Serialized with `JSON.stringify` rather than joined with a plain
+ * delimiter: a delimiter can appear inside a command or an arg, so joining
+ * `["a::b"]` and `["a", "b"]` with `"::"` would produce the identical string
+ * `"a::b"` and silently collapse two different declarations into one.
+ * `JSON.stringify` encodes each element's own boundaries, so no combination
+ * of matcher/command/args can collide with another.
  */
 function dedupeKeyFor(hook: RawHook): string {
   const parts = [hook.event, hook.matcher ?? "", hook.command, ...(hook.args ?? [])];
-  return parts.join(DEDUPE_KEY_SEPARATOR);
+  return JSON.stringify(parts);
 }
 
 /**
