@@ -376,7 +376,6 @@ describe("inspectPackageEntries", () => {
     ["tests/index.test.js"],
     ["dist/index.test.js"],
     ["fixtures/sample.json"],
-    ["fixture/sample.json"],
     ["coverage/lcov.info"],
     ["node_modules/left-pad/index.js"],
     ["dist/tsconfig.tsbuildinfo"],
@@ -390,6 +389,19 @@ describe("inspectPackageEntries", () => {
     const problems = inspectPackageEntries([entry(forbiddenPath)], {});
 
     expect(codesOf(problems)).toContain("ERR_PACKAGE_PATH_FORBIDDEN");
+  });
+
+  it("allows the singular fixture module, which is a published static-layer module", () => {
+    // `src/internal/fixture/` is named in AGENTS.md's architecture and
+    // compiles into the tarball. The forbidden-path rule is about *test*
+    // fixtures, which live in `tests/fixtures/` — plural — so matching the
+    // singular too rejected a legitimate module from its own package.
+    const problems = inspectPackageEntries(
+      [entry("dist/internal/fixture/load.js")],
+      {},
+    );
+
+    expect(codesOf(problems)).not.toContain("ERR_PACKAGE_PATH_FORBIDDEN");
   });
 
   it("rejects path traversal and absolute paths", () => {

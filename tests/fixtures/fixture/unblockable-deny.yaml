@@ -1,0 +1,4 @@
+cases:
+  - event: Notification
+    expect:
+      decision: deny

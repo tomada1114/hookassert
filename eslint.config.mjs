@@ -377,6 +377,7 @@ export default defineConfig([
       "tests/matcher.test.ts",
       "tests/cli.test.ts",
       "tests/report.test.ts",
+      "tests/fixture.test.ts",
     ],
     rules: {
       "no-restricted-imports": "off",

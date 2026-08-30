@@ -23,6 +23,7 @@ export type {
   Decision,
   EventName,
   ExecOutcome,
+  PayloadOrigin,
   Provenance,
   ResolvedHook,
   SettingsLayer,

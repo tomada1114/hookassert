@@ -1,4 +1,4 @@
-import type { SettingsLayer } from "../types.js";
+import type { EventName, SettingsLayer } from "../types.js";
 
 /**
  * The exit code every hookassert failure resolves to.
@@ -192,5 +192,123 @@ export class SettingsNotFoundError extends HookassertError {
     super(`Settings file not found: ${file}`);
     this.name = "SettingsNotFoundError";
     this.file = file;
+  }
+}
+
+/**
+ * Thrown when a fixture file fails schema validation.
+ *
+ * @remarks
+ * Covers every way `fixture/load.ts` can reject a fixture file's content
+ * before it becomes a typed `FixtureFile`: YAML that does not parse at all,
+ * YAML that parses but does not satisfy `schema/fixture.schema.json`, a
+ * case's `event` that is not one of the documented Claude Code hook events,
+ * and an `origin.recorded` envelope file that cannot be read or does not
+ * carry a valid `capturedAt`. All of these mean the file cannot be turned
+ * into a typed `FixtureFile`, so they resolve to the same load error from
+ * `src/internal/errors.ts`'s exit-code table.
+ */
+export class FixtureSchemaError extends HookassertError {
+  /** Stable discriminator, unchanged across non-breaking releases. */
+  readonly code = "ERR_FIXTURE_SCHEMA" as const;
+
+  /** Fixture schema failures always exit 5 (load error). */
+  readonly exitCode = 5;
+
+  /** Absolute path of the fixture file that failed validation. */
+  readonly file: string;
+
+  /**
+   * @param file - Absolute path of the offending fixture file.
+   * @param reason - What about the file's shape was rejected.
+   */
+  constructor(file: string, reason: string) {
+    super(`Failed to validate fixture file ${file}: ${reason}`);
+    this.name = "FixtureSchemaError";
+    this.file = file;
+  }
+}
+
+/**
+ * Thrown when a declared fixture file does not exist on disk.
+ *
+ * @remarks
+ * Distinct from {@link FixtureSchemaError}: the file's *content* is never
+ * inspected here because there is no content to read. Mirrors
+ * {@link SpecNotFoundError}.
+ */
+export class FixtureNotFoundError extends HookassertError {
+  /** Stable discriminator, unchanged across non-breaking releases. */
+  readonly code = "ERR_FIXTURE_NOT_FOUND" as const;
+
+  /** Fixture not-found failures always exit 5 (load error). */
+  readonly exitCode = 5;
+
+  /** Absolute path that was expected to hold a fixture file. */
+  readonly file: string;
+
+  /**
+   * @param file - Absolute path that was expected to hold a fixture file.
+   */
+  constructor(file: string) {
+    super(`Fixture file not found: ${file}`);
+    this.name = "FixtureNotFoundError";
+    this.file = file;
+  }
+}
+
+/**
+ * Thrown when a fixture case expects a decision the event it targets can
+ * never produce.
+ *
+ * @remarks
+ * A case that declares `expect.decision: "deny"` against an event the loaded
+ * spec documents no deny channel for — neither an honored blocking exit code
+ * nor a deny-shaped value in its own `jsonDecisions`, which is what
+ * `decision/`'s `canProduceDeny` weighs — cannot possibly pass: no hook run
+ * against it will ever produce a `deny` decision. `blockable` alone is *not*
+ * that test; it describes only the exit-code channel, and `PermissionRequest`,
+ * `PostToolUse` and `PostToolUseFailure` all deny through JSON while being
+ * `blockable: false`. `fixture/load.ts`
+ * raises this at load time, before any process is spawned for the case —
+ * the declaration cannot possibly be true, so it fails before any process
+ * starts, never after one has already run. `message` proposes a workable
+ * alternative (expecting `"error"`, or asserting
+ * `stdoutContains`/`stderrContains` instead) rather than a bare rejection.
+ */
+export class FixtureUnblockableDecisionError extends HookassertError {
+  /** Stable discriminator, unchanged across non-breaking releases. */
+  readonly code = "ERR_FIXTURE_UNBLOCKABLE_DECISION" as const;
+
+  /** Fixture unblockable-decision failures always exit 5 (load error). */
+  readonly exitCode = 5;
+
+  /** Absolute path of the fixture file the offending case was declared in. */
+  readonly file: string;
+
+  /** The event the offending case declares, which the loaded spec documents no deny channel for. */
+  readonly event: EventName;
+
+  /** The decision the offending case expects, which that event can never produce. */
+  readonly decision: string;
+
+  /**
+   * @param file - Absolute path of the fixture file the case was declared in.
+   * @param event - The event the case targets, which the spec documents no deny channel for.
+   * @param decision - The decision the case expects.
+   */
+  constructor(file: string, event: EventName, decision: string) {
+    super(
+      `Fixture ${file} expects decision "${decision}" from event "${event}", ` +
+        `but the loaded spec gives "${event}" no way to deny: it honors no ` +
+        `blocking exit code and documents no deny-shaped value in its own ` +
+        `jsonDecisions, so this case can never pass. ` +
+        `Expect decision: "error" instead, or drop the "decision" expectation ` +
+        `and assert "stdoutContains"/"stderrContains" against the hook's own output.`,
+    );
+    this.name = "FixtureUnblockableDecisionError";
+    this.file = file;
+    this.event = event;
+    this.decision = decision;
   }
 }

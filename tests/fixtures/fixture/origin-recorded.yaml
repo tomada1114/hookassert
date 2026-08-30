@@ -1,0 +1,8 @@
+cases:
+  - event: PreToolUse
+    tool: Bash
+    input: {}
+    origin:
+      recorded: envelope.json
+    expect:
+      fires: true

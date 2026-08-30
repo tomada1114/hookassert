@@ -1,0 +1,27 @@
+{
+  "settings": [".claude/settings.json"],
+  "defaults": {
+    "timeoutMs": 5000,
+    "env": { "MY_FLAG": "1" },
+    "cwd": "."
+  },
+  "cases": [
+    {
+      "event": "PreToolUse",
+      "tool": "Bash",
+      "input": { "command": "git push --force" },
+      "expect": {
+        "fires": true,
+        "decision": "deny",
+        "exitCode": 2,
+        "stderrContains": "force push"
+      }
+    },
+    {
+      "event": "Stop",
+      "expect": { "fires": true },
+      "stub": { "~/notify.sh": { "exitCode": 0 } },
+      "dryRun": false
+    }
+  ]
+}

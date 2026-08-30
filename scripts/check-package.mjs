@@ -180,7 +180,15 @@ export const FORBIDDEN_PATHS = [
     reason: "a test directory, which is not part of the contract",
   },
   { pattern: /(^|\/)[^/]*\.test\.[^/]+$/, reason: "a test file" },
-  { pattern: /(^|\/)fixtures?(\/|$)/, reason: "test fixtures" },
+  {
+    // Plural only. Every test-fixture directory in this repository is
+    // `tests/fixtures/`, while the singular `fixture` is a real published
+    // module — `src/internal/fixture/` is named in AGENTS.md's architecture
+    // and compiles to `dist/internal/fixture/`. Matching both spellings
+    // rejected that module from its own tarball.
+    pattern: /(^|\/)fixtures(\/|$)/,
+    reason: "test fixtures",
+  },
   { pattern: /(^|\/)coverage(\/|$)/, reason: "coverage output" },
   { pattern: /(^|\/)node_modules(\/|$)/, reason: "installed dependencies" },
   { pattern: /\.tsbuildinfo$/, reason: "a TypeScript incremental build cache" },

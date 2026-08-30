@@ -1,0 +1,14 @@
+defaults:
+  timeoutMs: 5000
+  env:
+    MY_FLAG: "1"
+  cwd: "."
+cases:
+  - event: PreToolUse
+    expect:
+      fires: true
+  - event: Stop
+    expect:
+      fires: true
+    dryRun: true
+    cwd: "/tmp/override"

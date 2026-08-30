@@ -1,0 +1,6 @@
+cases:
+  - event: PreToolUse
+    origin:
+      recorded: bad-envelope.json
+    expect:
+      fires: true

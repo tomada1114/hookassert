@@ -1,0 +1,6 @@
+cases:
+  - event: PreToolUse
+    origin:
+      recorded: envelope-missing-capturedat.json
+    expect:
+      fires: true
