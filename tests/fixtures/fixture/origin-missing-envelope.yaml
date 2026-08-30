@@ -1,0 +1,6 @@
+cases:
+  - event: PreToolUse
+    origin:
+      recorded: does-not-exist.json
+    expect:
+      fires: true

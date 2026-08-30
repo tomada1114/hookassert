@@ -1,0 +1,4 @@
+cases:
+  - event: PostToolUse
+    expect:
+      decision: deny

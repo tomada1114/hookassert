@@ -171,6 +171,36 @@ export interface ExecOutcome {
 }
 
 /**
+ * Where a fixture case's input payload came from.
+ *
+ * @remarks
+ * `"synthetic"` is what an omitted `origin` in a fixture YAML resolves to — a
+ * payload the fixture author wrote by hand. `"recorded"` is a payload
+ * captured from a real Claude Code session and replayed by pointing at the
+ * envelope file the `record` capture pipeline produced;
+ * `src/internal/fixture/load.ts` reads `capturedAt` and `claudeVersion` back
+ * out of that envelope so a later confidence display can say how old, and
+ * against which Claude Code version, the captured payload is.
+ *
+ * @public
+ */
+export type PayloadOrigin =
+  | {
+      /** The payload was captured from a real Claude Code session. */
+      readonly kind: "recorded";
+      /** When the payload was captured, as recorded in the envelope file. */
+      readonly capturedAt: string;
+      /** Absolute path of the envelope file `origin.recorded` pointed at. */
+      readonly sourceFile: string;
+      /** The Claude Code version active when the payload was captured, if the envelope recorded one. */
+      readonly claudeVersion: string | undefined;
+    }
+  | {
+      /** The payload was written by hand rather than captured. */
+      readonly kind: "synthetic";
+    };
+
+/**
  * Which mechanism a version probe tried, and failed, to read Claude Code's
  * own version from.
  *

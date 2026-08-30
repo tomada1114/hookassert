@@ -1,0 +1,4 @@
+cases:
+  - event: NotARealEvent
+    expect:
+      fires: true

@@ -1,0 +1,87 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/tomada1114/hookassert/schema/fixture.schema.json",
+  "title": "hookassert fixture file",
+  "description": "Schema for a fixture YAML file: the test cases a user writes to declare expected hook behavior against their merged settings, that src/internal/fixture/load.ts validates against.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["cases"],
+  "properties": {
+    "settings": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "defaults": { "$ref": "#/$defs/defaults" },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/fixtureCase" }
+    }
+  },
+  "$defs": {
+    "defaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["timeoutMs", "env", "cwd"],
+      "properties": {
+        "timeoutMs": { "type": "integer", "minimum": 0 },
+        "env": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "cwd": { "type": "string", "minLength": 1 }
+      }
+    },
+    "origin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recorded"],
+      "properties": {
+        "recorded": { "type": "string", "minLength": 1 }
+      }
+    },
+    "expectation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "fires": { "type": "boolean" },
+        "decision": {
+          "type": "string",
+          "enum": ["deny", "allow", "pass", "error", "unknown"]
+        },
+        "exitCode": { "type": "integer" },
+        "stdoutContains": { "type": "string" },
+        "stderrContains": { "type": "string" },
+        "context": {},
+        "updatedInput": {},
+        "timedOut": { "type": "boolean" }
+      }
+    },
+    "stub": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["exitCode"],
+        "properties": {
+          "exitCode": { "type": "integer" }
+        }
+      }
+    },
+    "fixtureCase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event", "expect"],
+      "properties": {
+        "event": { "type": "string", "minLength": 1 },
+        "tool": { "type": "string", "minLength": 1 },
+        "input": {},
+        "origin": { "$ref": "#/$defs/origin" },
+        "expect": { "$ref": "#/$defs/expectation" },
+        "stub": { "$ref": "#/$defs/stub" },
+        "dryRun": { "type": "boolean" },
+        "cwd": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

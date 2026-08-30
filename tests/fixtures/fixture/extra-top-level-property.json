@@ -1,0 +1,4 @@
+{
+  "cases": [{ "event": "PreToolUse", "expect": { "fires": true } }],
+  "extra": true
+}
