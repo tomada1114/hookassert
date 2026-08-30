@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./scripts/guard.sh",
+            "args": ["--strict", "--fix"],
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

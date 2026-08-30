@@ -1,0 +1,16 @@
+{
+  // hookassert reads this file as JSONC, so a comment here is fine.
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./scripts/project-check.sh",
+          },
+        ],
+      },
+    ],
+  },
+}

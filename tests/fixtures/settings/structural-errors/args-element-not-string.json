@@ -1,0 +1,9 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [{ "type": "command", "command": "./x.sh", "args": [1, 2] }]
+      }
+    ]
+  }
+}

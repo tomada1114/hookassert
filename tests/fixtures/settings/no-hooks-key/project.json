@@ -1,0 +1,6 @@
+{
+  "$schema": "https://example.com/claude-code-settings.json",
+  "permissions": {
+    "allow": ["Bash(pnpm test:*)"]
+  }
+}

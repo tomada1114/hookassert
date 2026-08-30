@@ -1,0 +1,25 @@
+{
+  "hooks": {
+    "SomeFutureEvent": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./scripts/future.sh"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./scripts/known.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

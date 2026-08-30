@@ -1,0 +1,11 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          { "type": "command", "command": "./x.sh", "timeout": "nope" }
+        ]
+      }
+    ]
+  }
+}
