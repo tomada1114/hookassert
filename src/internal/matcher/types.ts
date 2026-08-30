@@ -43,15 +43,35 @@ export type VersionContext =
  *   name (`"Edit.*"` matching `"NotebookEdit"` is the documented, real
  *   Claude Code behavior this reproduces, not a bug).
  * - `"unknown"` — classification could not be established with confidence:
- *   either the detected version is outside `spec.claudeCodeRange`, or the
- *   matcher relies on a version-gated notation
- *   (`spec.matcherSyntax.rules[].sinceVersion`) that the detected — or
- *   undetermined — version cannot be confirmed to support.
- * - `"unsupported"` — the event's `matcherTargets.kind` is `"none"`: the
- *   event accepts no matcher at all, so a hook that declares one can never
- *   fire.
+ *   the event is missing from `spec.events`, the detected version is
+ *   outside `spec.claudeCodeRange`, or the matcher relies on a
+ *   version-gated notation (`spec.matcherSyntax.rules[].sinceVersion`) that
+ *   the detected — or undetermined — version cannot be confirmed to
+ *   support.
+ *
+ * There is no `"unsupported"` member: whether `event`'s `matcherTargets.kind`
+ * is `"none"` is not a classification question. Claude Code silently ignores
+ * a matcher on such an event and always runs the hook — `match.ts` decides
+ * that before ever calling `classifyMatcher`, so this type only ever
+ * describes an actual attempt to classify a matcher string.
  */
-export type MatcherKind = "exact-list" | "unanchored-regex" | "unknown" | "unsupported";
+export type MatcherKind = "exact-list" | "unanchored-regex" | "unknown";
+
+/**
+ * {@link classifyMatcher}'s verdict, plus — only when `kind` is `"unknown"`
+ * — the specific reason classification could not be established with
+ * confidence.
+ *
+ * @remarks
+ * A discriminated union rather than an optional `reason` field so a caller
+ * cannot read a reason without first narrowing on `kind`, and so
+ * `MatcherOutcome.reason` can name the actual cause instead of a fixed
+ * string listing every possible one.
+ */
+export type ClassifyResult =
+  | { readonly kind: "exact-list" }
+  | { readonly kind: "unanchored-regex" }
+  | { readonly kind: "unknown"; readonly reason: string };
 
 /**
  * One hook that did not end up in {@link MatchResult.firing}, and why.
@@ -99,4 +119,14 @@ export interface MatchResult {
 
   /** Every hook from `req.hooks` under `req.event` that did not fire. */
   readonly rejected: readonly MatcherOutcome[];
+
+  /**
+   * The subset of {@link MatchResult.firing} whose declared `matcher` was
+   * ignored rather than evaluated, because `req.event`'s
+   * `matcherTargets.kind` is `"none"` — Claude Code accepts no matcher
+   * there and silently ignores one if a hook declares it, running the hook
+   * regardless. Listed separately rather than folded silently into
+   * `firing` so a reporter can say the matcher had no effect.
+   */
+  readonly matcherIgnored: readonly ResolvedHook[];
 }

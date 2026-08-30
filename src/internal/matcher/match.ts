@@ -9,11 +9,10 @@
  * not fire was rejected.
  */
 
-import type { EventName, ResolvedHook } from "../../types.js";
+import type { ResolvedHook } from "../../types.js";
 import type { Spec } from "../spec/index.js";
-import { classifyMatcher } from "./classify.js";
+import { classifyMatcherDetailed } from "./classify.js";
 import type {
-  MatcherKind,
   MatcherOutcome,
   MatchRequest,
   MatchResult,
@@ -32,15 +31,24 @@ function exactListItems(matcher: string): readonly string[] {
  * Test `matcher` as an unanchored regular expression against `target`.
  *
  * @remarks
- * A matcher classified as `"unanchored-regex"` is not guaranteed to be a
- * syntactically valid `RegExp` (unbalanced parentheses, for example) — a
- * hook declaration is user-authored settings content, not something this
- * static layer validated on the way in. Treating a construction failure as
- * "did not match" keeps one bad declaration from aborting every other
- * hook's evaluation; `lint-matcher`'s later issue is where that gets
- * surfaced as a finding instead of swallowed here.
+ * `"*"` is Claude Code's documented "match everything" wildcard and is
+ * handled before ever attempting to compile it: `new RegExp("*")` throws
+ * `SyntaxError: Nothing to repeat`, which the `catch` below would otherwise
+ * swallow into a false non-match, silently disabling every hook a settings
+ * file declares `"matcher": "*"` for.
+ *
+ * Beyond that one case, a matcher classified as `"unanchored-regex"` is not
+ * guaranteed to be a syntactically valid `RegExp` (unbalanced parentheses,
+ * for example) — a hook declaration is user-authored settings content, not
+ * something this static layer validated on the way in. Treating a
+ * construction failure as "did not match" keeps one bad declaration from
+ * aborting every other hook's evaluation; `lint-matcher`'s later issue is
+ * where that gets surfaced as a finding instead of swallowed here.
  */
 function testUnanchoredRegex(matcher: string, target: string): boolean {
+  if (matcher === "*") {
+    return true;
+  }
   try {
     return new RegExp(matcher).test(target);
   } catch {
@@ -48,21 +56,8 @@ function testUnanchoredRegex(matcher: string, target: string): boolean {
   }
 }
 
-function unsupportedOutcome(event: EventName, hook: ResolvedHook): MatcherOutcome {
-  return {
-    hook,
-    kind: "unsupported",
-    reason: `the ${event} event's matcherTargets.kind is "none": hooks may not declare a matcher for this event`,
-  };
-}
-
-function unknownOutcome(hook: ResolvedHook): MatcherOutcome {
-  return {
-    hook,
-    kind: "unknown",
-    reason:
-      "the matcher's classification could not be determined with confidence: the detected Claude Code version is undetermined, outside spec.claudeCodeRange, or below a version-gated notation rule's sinceVersion",
-  };
+function unknownOutcome(hook: ResolvedHook, reason: string): MatcherOutcome {
+  return { hook, kind: "unknown", reason };
 }
 
 function exactListOutcome(
@@ -93,6 +88,12 @@ function unanchoredRegexOutcome(hook: ResolvedHook): MatcherOutcome {
  * A hook with no declared matcher (`hook.matcher === undefined`) always
  * fires — an absent matcher is Claude Code's own "match everything"
  * shorthand, independent of `spec.events[event].matcherTargets`.
+ *
+ * When `req.event`'s `matcherTargets.kind` is `"none"`, every hook fires
+ * regardless of what it declares as `matcher` — Claude Code silently
+ * ignores a matcher there. Such a hook is still listed in
+ * {@link MatchResult.matcherIgnored} so a reporter can say the matcher had
+ * no effect, rather than pretending it was never declared.
  */
 export function matchHooks(
   spec: Spec,
@@ -101,6 +102,7 @@ export function matchHooks(
 ): MatchResult {
   const firing: ResolvedHook[] = [];
   const rejected: MatcherOutcome[] = [];
+  const matcherIgnored: ResolvedHook[] = [];
 
   for (const hook of req.hooks) {
     if (hook.event !== req.event) {
@@ -113,15 +115,18 @@ export function matchHooks(
     }
 
     const matcher = hook.matcher;
-    const kind: MatcherKind = classifyMatcher(spec, v, req.event, matcher);
 
-    switch (kind) {
-      case "unsupported": {
-        rejected.push(unsupportedOutcome(req.event, hook));
-        break;
-      }
+    if (spec.events[req.event]?.matcherTargets.kind === "none") {
+      firing.push(hook);
+      matcherIgnored.push(hook);
+      continue;
+    }
+
+    const result = classifyMatcherDetailed(spec, v, req.event, matcher);
+
+    switch (result.kind) {
       case "unknown": {
-        rejected.push(unknownOutcome(hook));
+        rejected.push(unknownOutcome(hook, result.reason));
         break;
       }
       case "exact-list": {
@@ -143,5 +148,5 @@ export function matchHooks(
     }
   }
 
-  return { firing, rejected };
+  return { firing, rejected, matcherIgnored };
 }

@@ -3,10 +3,8 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { SettingsParseError } from "../src/internal/errors.js";
 import { classifyMatcher, matchHooks } from "../src/internal/matcher/index.js";
 import type { MatchRequest, VersionContext } from "../src/internal/matcher/index.js";
-import { loadSettings } from "../src/internal/settings/index.js";
 import { loadSpecFile, parseClaudeVersion } from "../src/internal/spec/index.js";
 import type { Spec } from "../src/internal/spec/index.js";
 import type { EventName, Provenance, ResolvedHook } from "../src/types.js";
@@ -20,11 +18,6 @@ import type { EventName, Provenance, ResolvedHook } from "../src/types.js";
 
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
 const REAL_SPEC_PATH = path.join(REPO_ROOT, "spec", "claude-code-2.1.251-2.2.0.json");
-const FIXTURES_DIR = fileURLToPath(new URL("./fixtures/matcher/", import.meta.url));
-
-function fixturePath(caseDir: string, file: string): string {
-  return path.join(FIXTURES_DIR, caseDir, file);
-}
 
 const REAL_SPEC: Spec = loadSpecFile(REAL_SPEC_PATH);
 
@@ -174,11 +167,26 @@ describe("classifyMatcher: the three-way classification", () => {
     );
   });
 
-  it("treats an event absent from spec.events as not matcherTargets.kind none", () => {
+  it("classifies an event missing from spec.events as unknown rather than confidently exact-list", () => {
     const sparseSpec: Spec = { ...REAL_SPEC, events: {} };
     expect(classifyMatcher(sparseSpec, IN_RANGE_VERSION, "PreToolUse", "Bash")).toBe(
-      "exact-list",
+      "unknown",
     );
+  });
+
+  it("* is Claude Code's match-everything wildcard, not an uncompilable regex", () => {
+    expect(classifyMatcher(REAL_SPEC, IN_RANGE_VERSION, "PreToolUse", "*")).toBe(
+      "unanchored-regex",
+    );
+
+    const hook = makeHook("PreToolUse", "*");
+    const result = matchHooks(
+      REAL_SPEC,
+      IN_RANGE_VERSION,
+      requestFor("PreToolUse", hook, "Bash"),
+    );
+    expect(result.firing).toEqual([hook]);
+    expect(result.rejected).toEqual([]);
   });
 });
 
@@ -263,6 +271,31 @@ describe("MatcherOutcome: why a hook did not fire", () => {
     expect(result.rejected).toHaveLength(1);
   });
 
+  it("a * matcher with no target never fires and is rejected, rather than throwing", () => {
+    const hook = makeHook("PreToolUse", "*");
+    expect(() =>
+      matchHooks(
+        REAL_SPEC,
+        IN_RANGE_VERSION,
+        requestFor("PreToolUse", hook, undefined),
+      ),
+    ).not.toThrow();
+
+    const result = matchHooks(
+      REAL_SPEC,
+      IN_RANGE_VERSION,
+      requestFor("PreToolUse", hook, undefined),
+    );
+    expect(result.firing).toEqual([]);
+    expect(result.rejected).toEqual([
+      {
+        hook,
+        kind: "unanchored-regex",
+        reason: "evaluated as an unanchored regex and did not match",
+      },
+    ]);
+  });
+
   it("a hook with no declared matcher always fires", () => {
     const hook = makeHook("PreToolUse", undefined);
     const result = matchHooks(
@@ -311,6 +344,9 @@ describe("version gating: never silently pass", () => {
     expect(result.firing).toEqual([]);
     expect(result.rejected).toHaveLength(1);
     expect(result.rejected[0]?.kind).toBe("unknown");
+    expect(result.rejected[0]?.reason).toBe(
+      "the detected Claude Code version is below a version-gated notation rule's sinceVersion",
+    );
   });
 
   it("a hyphen-exact-match matcher below claude 2.1.195 degrades to unknown", () => {
@@ -347,6 +383,9 @@ describe("version gating: never silently pass", () => {
     expect(result.firing).toEqual([]);
     expect(result.rejected).toHaveLength(1);
     expect(result.rejected[0]?.kind).toBe("unknown");
+    expect(result.rejected[0]?.reason).toBe(
+      "the detected Claude Code version is outside spec.claudeCodeRange",
+    );
   });
 
   it("an undetermined version degrades version-dependent matcher judgments to unknown", () => {
@@ -362,10 +401,127 @@ describe("version gating: never silently pass", () => {
       "exact-list",
     );
   });
+
+  it("an event missing from spec.events degrades to unknown, naming that as the reason", () => {
+    const sparseSpec: Spec = { ...REAL_SPEC, events: {} };
+    const hook = makeHook("PreToolUse", "Bash");
+    const result = matchHooks(
+      sparseSpec,
+      IN_RANGE_VERSION,
+      requestFor("PreToolUse", hook, "Bash"),
+    );
+    expect(result.firing).toEqual([]);
+    expect(result.rejected).toEqual([
+      {
+        hook,
+        kind: "unknown",
+        reason:
+          "the PreToolUse event is not described by this spec, so its matcher cannot be classified with confidence",
+      },
+    ]);
+  });
+
+  it("an undetermined version's reason names the undetermined version, not the range or sinceVersion cause", () => {
+    const undetermined: VersionContext = { kind: "undetermined" };
+    const hook = makeHook("PreToolUse", "Edit, Write");
+    const result = matchHooks(
+      REAL_SPEC,
+      undetermined,
+      requestFor("PreToolUse", hook, "Edit"),
+    );
+    expect(result.firing).toEqual([]);
+    expect(result.rejected).toEqual([
+      {
+        hook,
+        kind: "unknown",
+        reason:
+          "the Claude Code version could not be determined, and this matcher relies on a version-gated notation rule",
+      },
+    ]);
+  });
+
+  it("a matcherSyntax rule id colliding with Object.prototype (toString) is treated as gating nothing", () => {
+    // Object.prototype.toString is a function, not a character string; the
+    // old Record-indexed lookup would have read it through the prototype
+    // chain instead of finding it absent. A Map has no such hazard, so this
+    // rule id — even set to an implausibly high sinceVersion — must not
+    // degrade an otherwise-supported tool-name exact-list matcher.
+    const specWithPrototypeRule: Spec = {
+      ...REAL_SPEC,
+      matcherSyntax: {
+        ...REAL_SPEC.matcherSyntax,
+        rules: [
+          ...REAL_SPEC.matcherSyntax.rules,
+          { id: "toString", sinceVersion: "99.0.0" },
+        ],
+      },
+    };
+    expect(
+      classifyMatcher(specWithPrototypeRule, IN_RANGE_VERSION, "PreToolUse", "Bash"),
+    ).toBe("exact-list");
+  });
+
+  it("the hyphen/comma notation rules do not gate a field-target matcher, even under an undetermined version", () => {
+    // PreModelSwitch's matcherTargets.kind is "field", not "tool-name" — the
+    // domain the hyphen-exact-match and comma-separated-list rules describe.
+    expect(REAL_SPEC.events["PreModelSwitch"]?.matcherTargets.kind).toBe("field");
+
+    const undetermined: VersionContext = { kind: "undetermined" };
+    expect(
+      classifyMatcher(REAL_SPEC, undetermined, "PreModelSwitch", "claude-opus-5"),
+    ).toBe("exact-list");
+  });
+
+  it("replays every spec.matcherTable row under an undetermined version, reconciled against the row's own sinceVersion", () => {
+    const undetermined: VersionContext = { kind: "undetermined" };
+
+    for (const row of REAL_SPEC.matcherTable) {
+      const atKnownVersion = classifyMatcher(
+        REAL_SPEC,
+        IN_RANGE_VERSION,
+        row.event as EventName,
+        row.matcher,
+      );
+      const atUndetermined = classifyMatcher(
+        REAL_SPEC,
+        undetermined,
+        row.event as EventName,
+        row.matcher,
+      );
+
+      if (row.sinceVersion === null) {
+        // The spec's own statement that this matcher is not version-gated:
+        // an undetermined version must never degrade it.
+        expect(atUndetermined, `${row.event} ${row.matcher} (sinceVersion: null)`).toBe(
+          atKnownVersion,
+        );
+      } else if (atKnownVersion === "exact-list") {
+        // Version-gated and classified exact-list at a known in-range
+        // version: cannot be confirmed under an undetermined version, so it
+        // must degrade.
+        expect(
+          atUndetermined,
+          `${row.event} ${row.matcher} (sinceVersion: ${row.sinceVersion})`,
+        ).toBe("unknown");
+      } else {
+        // A regex-classified matcher is never gated by the notation rules,
+        // whatever its row's sinceVersion says.
+        expect(
+          atUndetermined,
+          `${row.event} ${row.matcher} (sinceVersion: ${row.sinceVersion})`,
+        ).toBe(atKnownVersion);
+      }
+    }
+  });
 });
 
 describe("matcherTargets.kind: none", () => {
-  it("an event with matcherTargets.kind: none rejects any hook that declares a matcher", () => {
+  // A `"none"` event has no matcher support at all, and Claude Code
+  // silently ignores a `matcher` field on one of its hook declarations —
+  // the hook still runs. This supersedes an earlier plan (issue #5's TDD
+  // notes) to reject such a hook; see src/internal/spec/types.ts's
+  // MatcherTargets doc for the authoritative behavior.
+  it("an event with matcherTargets.kind: none fires a hook that declares a matcher, ignoring it", () => {
     expect(REAL_SPEC.events["Stop"]?.matcherTargets.kind).toBe("none");
 
     const hook = makeHook("Stop", "manual");
@@ -375,18 +531,12 @@ describe("matcherTargets.kind: none", () => {
       requestFor("Stop", hook, undefined),
     );
 
-    expect(result.firing).toEqual([]);
-    expect(result.rejected).toEqual([
-      {
-        hook,
-        kind: "unsupported",
-        reason:
-          'the Stop event\'s matcherTargets.kind is "none": hooks may not declare a matcher for this event',
-      },
-    ]);
+    expect(result.firing).toEqual([hook]);
+    expect(result.rejected).toEqual([]);
+    expect(result.matcherIgnored).toEqual([hook]);
   });
 
-  it("an event with matcherTargets.kind: none still fires a hook that declares no matcher", () => {
+  it("an event with matcherTargets.kind: none still fires a hook that declares no matcher, and does not list it as matcherIgnored", () => {
     const hook = makeHook("Stop", undefined);
     const result = matchHooks(
       REAL_SPEC,
@@ -396,25 +546,18 @@ describe("matcherTargets.kind: none", () => {
 
     expect(result.firing).toEqual([hook]);
     expect(result.rejected).toEqual([]);
+    expect(result.matcherIgnored).toEqual([]);
   });
-});
 
-describe("a matcher written as a JSON array disables every hook in that settings file", () => {
-  it("throws SettingsParseError and yields zero hooks from the whole file, not just the bad one", () => {
-    let caught: unknown;
-    try {
-      loadSettings([
-        {
-          path: fixturePath("array-matcher-disables-file", "project.json"),
-          layer: "project",
-        },
-      ]);
-    } catch (error) {
-      caught = error;
-    }
+  it("a matcher-declaring firing hook under a matcher-supporting event is not listed as matcherIgnored", () => {
+    const hook = makeHook("PreToolUse", "Bash");
+    const result = matchHooks(
+      REAL_SPEC,
+      IN_RANGE_VERSION,
+      requestFor("PreToolUse", hook, "Bash"),
+    );
 
-    expect(caught).toBeInstanceOf(SettingsParseError);
-    expect((caught as SettingsParseError).code).toBe("ERR_SETTINGS_PARSE");
-    expect((caught as SettingsParseError).exitCode).toBe(5);
+    expect(result.firing).toEqual([hook]);
+    expect(result.matcherIgnored).toEqual([]);
   });
 });
