@@ -3,8 +3,8 @@ name: type-testing
 description: >
   Covers writing compile-time assertions in tests/types.test.ts with Vitest's
   expectTypeOf — inferred return types, generic preservation, accepted and rejected call
-  signatures, and discriminated-union narrowing on classes like InvalidInputError and
-  TimeoutError. Use when adding or reviewing a @ts-expect-error assertion, a type test
+  signatures, and narrowing a union such as EventName or SettingsLayer on its
+  discriminant. Use when adding or reviewing a @ts-expect-error assertion, a type test
   for a new or changed public signature, or when a type test passes despite the
   annotation being wrong.
 ---
@@ -36,17 +36,17 @@ depends on a code path never reached, nothing was proven at all.
 
 ```ts
 // Wrong: runs the invalid call as part of the test body.
-it("rejects a number", () => {
-  // @ts-expect-error a number is not a valid identifier source
-  normalizeIdentifier(42);
+it("rejects a bare string argv", () => {
+  // @ts-expect-error argv is the argument list, not one joined string
+  runCli("--help");
 });
 
 // Right: declare the invalid call inside a function, never invoke it. The
 // assertion is that the function fails to compile.
-it("rejects a number", () => {
+it("rejects a bare string argv", () => {
   const rejected = (): void => {
-    // @ts-expect-error a number is not a valid identifier source
-    normalizeIdentifier(42);
+    // @ts-expect-error argv is the argument list, not one joined string
+    runCli("--help");
   };
   expect(rejected).toBeTypeOf("function");
 });
@@ -54,25 +54,26 @@ it("rejects a number", () => {
 
 ## Trap 2: a union initializer narrows before the assertion runs
 
-`const error: A | B = new B()` infers `error` as `B`, not `A | B` — TypeScript narrows a
+`const layer: A | B = "b"` infers `layer` as `"b"`, not `A | B` — TypeScript narrows a
 `const` on its initializer. An assertion against a variable declared this way tests the
-concrete class, not the union, so it proves nothing about the branch that is supposed to
-widen and narrow.
+one member the initializer picked, not the union, so it proves nothing about the branch
+that is supposed to widen and narrow. The same happens with a class union, where
+`const error: A | B = new B()` infers `B`.
 
 ```ts
-// Wrong: `error` is inferred as TimeoutError, not the union.
-const error: InvalidInputError | TimeoutError = new TimeoutError(1);
+// Wrong: `layer` is inferred as "project", not the union.
+const layer: SettingsLayer = "project";
 
 // Right: receive the value as a function parameter, so the annotation on the
 // parameter — not the argument's own type — is what the union test checks.
-const classify = (error: InvalidInputError | TimeoutError): void => {
-  if (error.code === "ERR_TIMEOUT") {
-    expectTypeOf(error).toEqualTypeOf<TimeoutError>();
+const describe = (layer: SettingsLayer): void => {
+  if (layer === "explicit") {
+    expectTypeOf(layer).toEqualTypeOf<"explicit">();
   } else {
-    expectTypeOf(error).toEqualTypeOf<InvalidInputError>();
+    expectTypeOf(layer).toEqualTypeOf<"user" | "project" | "local">();
   }
 };
-classify(new TimeoutError(1));
+describe("project");
 ```
 
 ## A borrowed trap: `@ts-expect-error` can be satisfied by the wrong error

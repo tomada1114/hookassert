@@ -16,22 +16,38 @@ is unflagged, so a CommonJS consumer can `require()` it directly.
 
 ## Quick start
 
-```ts
-import { normalizeIdentifier } from "hookassert";
+hookassert is a command. Ask it what it ships:
 
-console.log(normalizeIdentifier("Hello World"));
-// => "hello-world"
+```sh
+hookassert --help
+```
+
+## Commands
+
+- `hookassert explain` shows which hooks a tool event fires, and why.
+- `hookassert lint` checks hook declarations for matcher and command mistakes.
+- `hookassert record` captures real hook payloads from a Claude Code session.
+- `hookassert test` replays recorded events and asserts on what the hooks did.
+
+None of the four has behavior yet: each currently exits `4` with `ERR_USAGE`, so a
+script that wires one up fails loudly instead of silently reporting success.
+
+## API
+
+The package root publishes the type vocabulary those commands report in, and no runtime
+value — `EventName`, `SettingsLayer`, `Provenance`, and `ResolvedHook`:
+
+```ts
+import type { ResolvedHook } from "hookassert";
+
+function summarize(hook: ResolvedHook): string {
+  const at = `${hook.provenance.file}:${String(hook.provenance.line)}`;
+  return `${hook.event} runs ${hook.command} (declared at ${at})`;
+}
 ```
 
 All public symbols are named exports from the package root. Deep imports are private and
 blocked by the package export map.
-
-## API
-
-- `normalizeIdentifier(input, options?)` creates a URL- and filename-safe ASCII
-  identifier using `-`, `_`, `.`, or `~` as its separator.
-- `withTimeout(operation, options)` runs an abortable operation with a deadline.
-- `InvalidInputError` and `TimeoutError` expose stable error codes.
 
 See the generated TypeDoc documentation from `pnpm docs:build` for the full API
 reference.

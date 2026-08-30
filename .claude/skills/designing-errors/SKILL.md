@@ -2,8 +2,8 @@
 name: designing-errors
 description: >
   Covers the shape of a package error class and the vocabulary of its `code` string, for
-  both `src/errors.ts`-style errors and `scripts/**` error codes such as `ERR_SMOKE_*`.
-  Use when adding or changing an `Error` subclass, choosing or renaming an `ERR_*` code,
+  both `src/internal/errors.ts` errors and `scripts/**` codes such as `ERR_SMOKE_*`. Use
+  when adding or changing an `Error` subclass, choosing or renaming an `ERR_*` code,
   deciding what a rejected-input error should carry, or wiring an `AbortSignal`
   rejection reason.
 ---
@@ -35,15 +35,21 @@ catch clause, or a script's own error handling that matches on `message` text �
   content: a length that was exceeded, a field path, an allowed set, not the string the
   caller actually passed.
 - For an argument-validation error, the field that names what was rejected is the dotted
-  path as written in the public signature (`options.maxLength`), matching
-  `InvalidInputError.field` — never an internal variable name, which can be renamed
-  without that being a contract change.
+  path as written in the public signature (`options.maxLength`) — never an internal
+  variable name, which can be renamed without that being a contract change.
 - When a function forwards an abort onto an `AbortSignal`, abort the controller with the
   exact same error instance the returned promise rejects with, not a fresh error
-  carrying the same message. `withTimeout` in `src/timeout.ts` is the model: the
-  `TimeoutError` it builds is passed to both `controller.abort(timeout)` and
-  `reject(timeout)`, so a cooperating operation reading `signal.reason` sees the
+  carrying the same message, so a cooperating operation reading `signal.reason` sees the
   identical object the caller's `catch` receives.
+
+## The hookassert base class
+
+Every error this package raises extends `HookassertError` in `src/internal/errors.ts`,
+which adds one field to the shape above: `exitCode`, the process status the CLI returns
+for that failure. The exit-code table lives in that file's own doc comment and is the
+one place it is written down — cite it from a new subclass rather than restating it, and
+never hand a subclass exit code `2`, which is reserved because it means "block" in the
+hooks domain. `UsageError` (`ERR_USAGE`, exit 4) is the worked example.
 
 ```ts
 /**

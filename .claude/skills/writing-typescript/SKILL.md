@@ -58,10 +58,13 @@ exported from `src/index.ts` (`public-api-contract`); the `.mjs` files under `sc
   `noUncheckedIndexedAccess` is on. Treat the `undefined` branch as real rather than
   asserting it away.
 - `exactOptionalPropertyTypes` makes an absent property and an explicit `undefined`
-  distinct types. A public `XOptions` interface declares its properties `readonly` and
-  `?:` (mirroring `NormalizeIdentifierOptions` and `WithTimeoutOptions`); an internal
-  argument whose omission would be a bug takes a required `T | undefined` instead, so a
-  caller cannot drop it by accident.
+  distinct types. An options bag a caller _passes in_ declares its properties `readonly`
+  and `?:`, so omitting one is how you take the default; a record the package _hands
+  back_, or an internal argument whose omission would be a bug, takes a required
+  `T | undefined` instead, so nothing can drop the field by accident. `ResolvedHook` in
+  `src/types.ts` is the worked example of the second kind: `.matcher`, `.args` and
+  `.timeoutMs` are each `T | undefined`, which is what distinguishes "this hook declares
+  no matcher" from "this record forgot to say".
 - `noPropertyAccessFromIndexSignature` forbids dot access on an index signature, while
   typed-lint's `dot-notation` pushes the other way for a literal key. A literal
   `as const` object escapes the conflict because its keys are literal, not an index
@@ -78,8 +81,8 @@ exported from `src/index.ts` (`public-api-contract`); the `.mjs` files under `sc
   `expectTypeOf` test in `tests/types.test.ts` either way — a hand-written annotation is
   the standard way to accidentally widen a generic that should stay preserved.
 - Keep exported generics narrow: accept the widest reasonable input, return the
-  narrowest true output. `withTimeout` is the worked example — it returns the
-  operation's own resolved type instead of widening it to something looser.
+  narrowest true output — a generic that resolves to its own argument's type rather than
+  widening to the constraint is the shape to aim for.
 - Let inference do the work inside a function body; reserve explicit annotations for
   boundaries (parameters, exported return types), not every local binding.
 
