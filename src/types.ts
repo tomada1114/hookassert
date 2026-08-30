@@ -14,20 +14,47 @@
  * Name of a Claude Code hook event.
  *
  * @remarks
- * A partial list. The authoritative set of officially documented event names is
- * transcribed from the Claude Code hooks documentation into the versioned spec,
- * whose `events` keys this union has to match exactly; extend it there and here
- * together when that spec lands.
+ * The complete set of officially documented event names, transcribed from the
+ * Claude Code hooks documentation into `spec/claude-code-2.1.251-2.2.0.json`.
+ * This union has to match that spec's `events` keys exactly; extend both
+ * together when a later spec range adds or removes an event.
  *
  * @public
  */
 export type EventName =
+  | "SessionStart"
+  | "Setup"
+  | "InstructionsLoaded"
+  | "UserPromptSubmit"
+  | "UserPromptExpansion"
+  | "MessageDisplay"
   | "PreToolUse"
+  | "PermissionRequest"
   | "PostToolUse"
+  | "PostToolUseFailure"
+  | "PostToolBatch"
+  | "PermissionDenied"
+  | "Notification"
+  | "SubagentStart"
+  | "SubagentStop"
+  | "TaskCreated"
+  | "TaskCompleted"
   | "Stop"
   | "StopFailure"
-  | "PermissionRequest"
-  | "FileChanged";
+  | "TeammateIdle"
+  | "ConfigChange"
+  | "CwdChanged"
+  | "DirectoryAdded"
+  | "FileChanged"
+  | "WorktreeCreate"
+  | "WorktreeRemove"
+  | "PreCompact"
+  | "PostCompact"
+  | "PreModelSwitch"
+  | "PostModelSwitch"
+  | "SessionEnd"
+  | "Elicitation"
+  | "ElicitationResult";
 
 /**
  * Which settings file a hook declaration came from.

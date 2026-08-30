@@ -96,3 +96,62 @@ export class SettingsParseError extends HookassertError {
     this.layer = layer;
   }
 }
+
+/**
+ * Thrown when a versioned hooks spec fails schema validation.
+ *
+ * @remarks
+ * Covers both ways `spec/load.ts` can reject a spec file's content: JSON that
+ * does not parse at all, and JSON that parses but does not satisfy
+ * `schema/spec.schema.json` (a missing required field, a value of the wrong
+ * shape, or an unrecognized property). Either way the file cannot be turned
+ * into a typed `Spec`, so both resolve to the same load error from
+ * `src/internal/errors.ts`'s exit-code table.
+ */
+export class SpecSchemaError extends HookassertError {
+  /** Stable discriminator, unchanged across non-breaking releases. */
+  readonly code = "ERR_SPEC_SCHEMA" as const;
+
+  /** Spec schema failures always exit 5 (load error). */
+  readonly exitCode = 5;
+
+  /** Absolute path of the spec file that failed validation. */
+  readonly file: string;
+
+  /**
+   * @param file - Absolute path of the offending spec file.
+   * @param reason - What about the file's shape was rejected.
+   */
+  constructor(file: string, reason: string) {
+    super(`Failed to validate spec file ${file}: ${reason}`);
+    this.name = "SpecSchemaError";
+    this.file = file;
+  }
+}
+
+/**
+ * Thrown when a declared spec file does not exist on disk.
+ *
+ * @remarks
+ * Distinct from {@link SpecSchemaError}: the file's *content* is never
+ * inspected here because there is no content to read.
+ */
+export class SpecNotFoundError extends HookassertError {
+  /** Stable discriminator, unchanged across non-breaking releases. */
+  readonly code = "ERR_SPEC_NOT_FOUND" as const;
+
+  /** Spec not-found failures always exit 5 (load error). */
+  readonly exitCode = 5;
+
+  /** Absolute path that was expected to hold a spec file. */
+  readonly file: string;
+
+  /**
+   * @param file - Absolute path that was expected to hold a spec file.
+   */
+  constructor(file: string) {
+    super(`Spec file not found: ${file}`);
+    this.name = "SpecNotFoundError";
+    this.file = file;
+  }
+}

@@ -27,24 +27,54 @@ import type { RawHook, SettingsSource } from "./types.js";
  * The event names this loader recognizes today.
  *
  * @remarks
- * Mirrors `src/types.ts`'s `EventName` union, which that file's own doc
- * comment already calls "a partial list" pending the versioned spec. A
- * `hooks` key outside this set is not an error here — it is treated as an
- * event Claude Code added after this list was last extended, and silently
- * carries no hooks forward, exactly as it would if the spec module (a later
- * issue) does not yet classify it either.
+ * Typed as `Record<EventName, true>` rather than an array so the mirror
+ * cannot silently drift: widening `src/types.ts`'s `EventName` without
+ * extending this map is a type error here, instead of a loader that quietly
+ * drops every hook declared under the new event. A `hooks` key outside this
+ * set is still not an error — it is treated as an event Claude Code added
+ * after this map was last extended, and silently carries no hooks forward,
+ * exactly as it would if the spec module does not yet classify it either. The
+ * `matcher` issue is what wires this loader to `src/internal/spec/` instead
+ * of this hand-kept mirror.
  */
-const KNOWN_EVENT_NAMES: readonly EventName[] = [
-  "PreToolUse",
-  "PostToolUse",
-  "Stop",
-  "StopFailure",
-  "PermissionRequest",
-  "FileChanged",
-];
+const KNOWN_EVENT_NAMES: Readonly<Record<EventName, true>> = {
+  SessionStart: true,
+  Setup: true,
+  InstructionsLoaded: true,
+  UserPromptSubmit: true,
+  UserPromptExpansion: true,
+  MessageDisplay: true,
+  PreToolUse: true,
+  PermissionRequest: true,
+  PostToolUse: true,
+  PostToolUseFailure: true,
+  PostToolBatch: true,
+  PermissionDenied: true,
+  Notification: true,
+  SubagentStart: true,
+  SubagentStop: true,
+  TaskCreated: true,
+  TaskCompleted: true,
+  Stop: true,
+  StopFailure: true,
+  TeammateIdle: true,
+  ConfigChange: true,
+  CwdChanged: true,
+  DirectoryAdded: true,
+  FileChanged: true,
+  WorktreeCreate: true,
+  WorktreeRemove: true,
+  PreCompact: true,
+  PostCompact: true,
+  PreModelSwitch: true,
+  PostModelSwitch: true,
+  SessionEnd: true,
+  Elicitation: true,
+  ElicitationResult: true,
+};
 
 function isEventName(value: string): value is EventName {
-  return KNOWN_EVENT_NAMES.includes(value as EventName);
+  return Object.hasOwn(KNOWN_EVENT_NAMES, value);
 }
 
 /** Find a property node's *value* node inside an object node, by key. */

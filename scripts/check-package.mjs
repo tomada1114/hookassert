@@ -105,6 +105,17 @@ export const ALLOWED_PATHS = [
     pattern:
       /^dist\/(?:(?!\.\.?(?:\/|$))[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_-][A-Za-z0-9_.-]*\.(?:d\.ts\.map|d\.ts|js\.map|js|json)$/,
   },
+  {
+    label: "the versioned hooks spec's JSON Schema under schema/",
+    // Flat only, on purpose: the spec module ships one schema file today, and
+    // widening this to nested directories is a deliberate decision to make
+    // later, not a default to allow ahead of it.
+    pattern: /^schema\/[A-Za-z0-9_-][A-Za-z0-9_.-]*\.json$/,
+  },
+  {
+    label: "a versioned hooks spec JSON file under spec/",
+    pattern: /^spec\/[A-Za-z0-9_-][A-Za-z0-9_.-]*\.json$/,
+  },
 ];
 
 /**
@@ -501,6 +512,33 @@ export function requiredEntryPaths(manifest) {
   return [...found].sort();
 }
 
+/**
+ * Whether `entryPath`, an actual path in the tarball, satisfies `requirement`,
+ * a raw leaf from {@link requiredEntryPaths}.
+ *
+ * @remarks
+ * A subpath `exports` pattern such as `"./schema/*.json"` collects as the
+ * literal string `schema/*.json`, which is never itself a file in the
+ * tarball — the promise it makes is that *some* file matches the pattern, so
+ * `*` is treated as a wildcard here rather than compared for equality.
+ *
+ * @param {string} entryPath - A path actually present in the tarball.
+ * @param {string} requirement - A raw leaf from {@link requiredEntryPaths}.
+ * @returns {boolean} True when `entryPath` satisfies `requirement`.
+ */
+export function satisfiesRequiredPath(entryPath, requirement) {
+  if (!requirement.includes("*")) {
+    return entryPath === requirement;
+  }
+  const pattern = new RegExp(
+    `^${requirement
+      .split("*")
+      .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+      .join(".*")}$`,
+  );
+  return pattern.test(entryPath);
+}
+
 // -----------------------------------------------------------------------------
 // Source maps
 // -----------------------------------------------------------------------------
@@ -802,9 +840,9 @@ export function inspectPackageEntries(entries, options = {}) {
   }
 
   if (options.manifest !== undefined) {
-    const present = new Set(files.map((entry) => entry.path));
+    const present = files.map((entry) => entry.path);
     for (const required of requiredEntryPaths(options.manifest)) {
-      if (!present.has(required)) {
+      if (!present.some((path) => satisfiesRequiredPath(path, required))) {
         problems.push({
           code: "ERR_PACKAGE_ENTRY_MISSING",
           path: required,

@@ -1,0 +1,1352 @@
+{
+  "specVersion": "1",
+  "claudeCodeRange": ">=2.1.251 <2.2.0",
+  "defaults": {
+    "hookTimeoutMs": 600000,
+    "promptHookTimeoutMs": 30000,
+    "agentHookTimeoutMs": 60000,
+    "reducedTimeoutMs": {
+      "UserPromptSubmit": 30000,
+      "PreModelSwitch": 30000,
+      "PostModelSwitch": 30000,
+      "MessageDisplay": 10000,
+      "SessionEnd": 1500
+    }
+  },
+  "hookEnv": {
+    "provided": [
+      "CLAUDE_PROJECT_DIR",
+      "CLAUDE_PLUGIN_ROOT",
+      "CLAUDE_PLUGIN_DATA",
+      "CLAUDE_CODE_REMOTE",
+      "CLAUDE_CODE_BRIDGE_SESSION_ID",
+      "CLAUDE_EFFORT"
+    ]
+  },
+  "matcherSyntax": {
+    "caseSensitive": true,
+    "exactListPattern": "^[A-Za-z0-9_\\- ,|]+$",
+    "narrowExactMatchEvents": ["FileChanged", "StopFailure"],
+    "narrowExactListPattern": "^[A-Za-z0-9_|]+$",
+    "rules": [
+      {
+        "id": "comma-separated-list",
+        "sinceVersion": "2.1.191"
+      },
+      {
+        "id": "hyphen-exact-match",
+        "sinceVersion": "2.1.195"
+      }
+    ]
+  },
+  "knownTools": [
+    "Bash",
+    "PowerShell",
+    "Edit",
+    "Write",
+    "Read",
+    "Glob",
+    "Grep",
+    "WebFetch",
+    "WebSearch",
+    "Agent",
+    "Workflow",
+    "AskUserQuestion",
+    "ExitPlanMode",
+    "NotebookEdit"
+  ],
+  "events": {
+    "SessionStart": {
+      "matcherTargets": {
+        "kind": "enum",
+        "field": "source",
+        "values": ["startup", "resume", "clear", "compact", "fork"]
+      },
+      "blockable": false,
+      "honorsExit2": false,
+      "jsonDecisions": [],
+      "exitCodeEffects": [
+        {
+          "exitCode": 2,
+          "effect": "non-blocking-error",
+          "stderrTo": "user"
+        },
+        {
+          "exitCode": 1,
+          "effect": "non-blocking-error",
+          "stderrTo": "user"
+        }
+      ],
+      "payloadShape": {
+        "verified": false,
+        "requiredKeys": [
+          "session_id",
+          "cwd",
+          "hook_event_name",
+          "transcript_path",
+          "source"
+        ]
+      }
+    },
+    "Setup": {
+      "matcherTargets": {
+        "kind": "enum",
+        "field": "trigger",
+        "values": ["init", "maintenance"]
+      },
+      "blockable": false,
+      "honorsExit2": false,
+      "jsonDecisions": [],
+      "exitCodeEffects": [
+        {
+          "exitCode": 2,
+          "effect": "ignored",
+          "stderrTo": "ignored"
+        },
+        {
+          "exitCode": 1,
+          "effect": "ignored",
+          "stderrTo": "ignored"
+        }
+      ],
+      "payloadShape": {
+        "verified": false,
+        "requiredKeys": ["session_id", "cwd", "hook_event_name", "trigger"]
+      }
+    },
+    "InstructionsLoaded": {
+      "matcherTargets": {
+        "kind": "enum",
+        "field": "load_reason",
+        "values": [
+          "session_start",
+          "nested_traversal",
+          "path_glob_match",
+          "include",
+          "compact"
+        ]
+      },
+      "blockable": false,
+      "honorsExit2": false,
+      "jsonDecisions": [],
+      "exitCodeEffects": [
+        {
+          "exitCode": 2,
+          "effect": "ignored",
+          "stderrTo": "ignored"
+        },
+        {
+          "exitCode": 1,
+          "effect": "ignored",
+          "stderrTo": "ignored"
+        }
+      ],
+      "payloadShape": {
+        "verified": false,
+        "requiredKeys": [
+          "session_id",
+          "cwd",
+          "hook_event_name",
+          "file_path",
+          "memory_type",
+          "load_reason"
+        ]
+      }
+    },
+    "UserPromptSubmit": {
+      "matcherTargets": {
+        "kind": "none"
+      },
+      "blockable": true,
+      "honorsExit2": true,
+      "jsonDecisions": ["block"],
+      "exitCodeEffects": [
+        {
+          "exitCode": 2,
+          "effect": "block",
+          "stderrTo": "user"
+        },
+        {
+          "exitCode": 1,
+          "effect": "non-blocking-error",
+          "stderrTo": "user"
+        }
+      ],
+      "payloadShape": {
+        "verified": false,
+        "requiredKeys": [
+          "session_id",
+          "cwd",
+          "hook_event_name",
+          "transcript_path",
+          "prompt"
+        ]
+      }
+    },
+    "UserPromptExpansion": {
+      "matcherTargets": {
+        "kind": "field",
+        "field": "command_name"
+      },
+      "blockable": true,
+      "honorsExit2": true,
+      "jsonDecisions": ["block"],
+      "exitCodeEffects": [
+        {
+          "exitCode": 2,
+          "effect": "block",
+          "stderrTo": "user"
+        },
+        {
+          "exitCode": 1,
+          "effect": "non-blocking-error",
+          "stderrTo": "user"
+        }
+      ],
+      "payloadShape": {
+        "verified": false,
+        "requiredKeys": [
+          "session_id",
+          "cwd",
+          "hook_event_name",
+          "expansion_type",
+          "command_name",
+          "prompt"
+        ]
+      }
+    },
+    "MessageDisplay": {
+      "matcherTargets": {
+        "kind": "none"
+      },
+      "blockable": false,
+      "honorsExit2": false,
+      "jsonDecisions": [],
+      "exitCodeEffects": [
+        {
+          "exitCode": 2,
+          "effect": "ignored",
+          "stderrTo": "ignored"
+        },
+        {
+          "exitCode": 1,
+          "effect": "ignored",
+          "stderrTo": "ignored"
+        }
+      ],
+      "payloadShape": {
+        "verified": false,
+        "requiredKeys": [
+          "session_id",
+          "cwd",
+          "hook_event_name",
+          "transcript_path",
+          "turn_id",
+          "message_id",
+          "index",
+          "final",
+          "delta"
+        ]
+      }
+    },
+    "PreToolUse": {
+      "matcherTargets": {
+        "kind": "tool-name"
+      },
+      "blockable": true,
+      "honorsExit2": true,
+      "jsonDecisions": ["allow", "deny", "ask", "defer"],
+      "exitCodeEffects": [
+        {
+          "exitCode": 2,
+          "effect": "block",
+          "stderrTo": "claude"
+        },
+        {
+          "exitCode": 1,
+          "effect": "non-blocking-error",
+          "stderrTo": "user"
+        }
+      ],
+      "payloadShape": {
+        "verified": false,
+        "requiredKeys": [
+          "session_id",
+          "cwd",
+          "hook_event_name",
+          "tool_name",
+          "tool_input",
+          "tool_use_id"
+        ]
+      }
+    },
+    "PermissionRequest": {
+      "matcherTargets": {
+        "kind": "tool-name"
+      },
+      "blockable": false,
+      "honorsExit2": false,
+      "jsonDecisions": ["allow", "deny"],
+      "exitCodeEffects": [
+        {
+          "exitCode": 2,
+          "effect": "ignored",
+          "stderrTo": "debug-log"
+        },
+        {
+          "exitCode": 1,
+          "effect": "non-blocking-error",
+          "stderrTo": "debug-log"
+        }
+      ],
+      "payloadShape": {
+        "verified": false,
+        "requiredKeys": [
+          "session_id",
+          "cwd",
+          "hook_event_name",
+          "tool_name",
+          "tool_input"
+        ]
+      }
+    },
+    "PostToolUse": {
+      "matcherTargets": {
+        "kind": "tool-name"
+      },
+      "blockable": false,
+      "honorsExit2": false,
+      "jsonDecisions": ["block"],
+      "exitCodeEffects": [
+        {
+          "exitCode": 2,
+          "effect": "non-blocking-error",
+          "stderrTo": "claude"
+        },
+        {
+          "exitCode": 1,
+          "effect": "non-blocking-error",
+          "stderrTo": "user"
+        }
+      ],
+      "payloadShape": {
+        "verified": false,
+        "requiredKeys": [
+          "session_id",
+          "cwd",
+          "hook_event_name",
+          "tool_name",
+          "tool_input",
+          "tool_response",
+          "tool_use_id"
+        ]
+      }
+    },
+    "PostToolUseFailure": {
+      "matcherTargets": {
+        "kind": "tool-name"
+      },
+      "blockable": false,
+      "honorsExit2": false,
+      "jsonDecisions": ["block"],
+      "exitCodeEffects": [
+        {
+          "exitCode": 2,
+          "effect": "non-blocking-error",
+          "stderrTo": "claude"
+        },
+        {
+          "exitCode": 1,
+          "effect": "non-blocking-error",
+          "stderrTo": "user"
+        }
+      ],
+      "payloadShape": {
+        "verified": false,
+        "requiredKeys": [
+          "session_id",
+          "cwd",
+          "hook_event_name",
+          "tool_name",
+          "tool_input",
+          "tool_use_id",
+          "error"
+        ]
+      }
+    },
+    "PostToolBatch": {
+      "matcherTargets": {
+        "kind": "none"
+      },
+      "blockable": true,
+      "honorsExit2": true,
+      "jsonDecisions": ["block"],
+      "exitCodeEffects": [
+        {
+          "exitCode": 2,
+          "effect": "block",
+          "stderrTo": "claude"
+        },
+        {
+          "exitCode": 1,
+          "effect": "non-blocking-error",
+          "stderrTo": "user"
+        }
+      ],
+      "payloadShape": {
+        "verified": false,
+        "requiredKeys": ["session_id", "cwd", "hook_event_name", "tool_calls"]
+      }
+    },
+    "PermissionDenied": {
+      "matcherTargets": {
+        "kind": "tool-name"
+      },
+      "blockable": false,
+      "honorsExit2": false,
+      "jsonDecisions": ["retry"],
+      "exitCodeEffects": [
+        {
+          "exitCode": 2,
+          "effect": "ignored",
+          "stderrTo": "ignored"
+        },
+        {
+          "exitCode": 1,
+          "effect": "ignored",
+          "stderrTo": "ignored"
+        }
+      ],
+      "payloadShape": {
+        "verified": false,
+        "requiredKeys": [
+          "session_id",
+          "cwd",
+          "hook_event_name",
+          "tool_name",
+          "tool_input",
+          "tool_use_id",
+          "reason"
+        ]
+      }
+    },
+    "Notification": {
+      "matcherTargets": {
+        "kind": "enum",
+        "field": "notification_type",
+        "values": [
+          "permission_prompt",
+          "idle_prompt",
+          "auth_success",
+          "elicitation_dialog",
+          "elicitation_url_dialog",
+          "elicitation_complete",
+          "elicitation_response",
+          "agent_needs_input",
+          "agent_completed",
+          "quota_auto_resume_fired",
+          "quota_auto_resume_stale",
+          "quota_auto_resume_disabled"
+        ]
+      },
+      "blockable": false,
+      "honorsExit2": false,
+      "jsonDecisions": [],
+      "exitCodeEffects": [
+        {
+          "exitCode": 2,
+          "effect": "ignored",
+          "stderrTo": "ignored"
+        },
+        {
+          "exitCode": 1,
+          "effect": "ignored",
+          "stderrTo": "ignored"
+        }
+      ],
+      "payloadShape": {
+        "verified": false,
+        "requiredKeys": [
+          "session_id",
+          "cwd",
+          "hook_event_name",
+          "message",
+          "notification_type"
+        ]
+      }
+    },
+    "SubagentStart": {
+      "matcherTargets": {
+        "kind": "field",
+        "field": "agent_type"
+      },
+      "blockable": false,
+      "honorsExit2": false,
+      "jsonDecisions": [],
+      "exitCodeEffects": [
+        {
+          "exitCode": 2,
+          "effect": "non-blocking-error",
+          "stderrTo": "user"
+        },
+        {
+          "exitCode": 1,
+          "effect": "non-blocking-error",
+          "stderrTo": "user"
+        }
+      ],
+      "payloadShape": {
+        "verified": false,
+        "requiredKeys": [
+          "session_id",
+          "cwd",
+          "hook_event_name",
+          "transcript_path",
+          "agent_id",
+          "agent_type"
+        ]
+      }
+    },
+    "SubagentStop": {
+      "matcherTargets": {
+        "kind": "field",
+        "field": "agent_type"
+      },
+      "blockable": true,
+      "honorsExit2": true,
+      "jsonDecisions": ["block"],
+      "exitCodeEffects": [
+        {
+          "exitCode": 2,
+          "effect": "block",
+          "stderrTo": "claude"
+        },
+        {
+          "exitCode": 1,
+          "effect": "non-blocking-error",
+          "stderrTo": "user"
+        }
+      ],
+      "payloadShape": {
+        "verified": false,
+        "requiredKeys": [
+          "session_id",
+          "cwd",
+          "hook_event_name",
+          "transcript_path",
+          "stop_hook_active",
+          "agent_id",
+          "agent_type",
+          "agent_transcript_path",
+          "last_assistant_message"
+        ]
+      }
+    },
+    "TaskCreated": {
+      "matcherTargets": {
+        "kind": "none"
+      },
+      "blockable": true,
+      "honorsExit2": true,
+      "jsonDecisions": ["block"],
+      "exitCodeEffects": [
+        {
+          "exitCode": 2,
+          "effect": "block",
+          "stderrTo": "claude"
+        },
+        {
+          "exitCode": 1,
+          "effect": "non-blocking-error",
+          "stderrTo": "user"
+        }
+      ],
+      "payloadShape": {
+        "verified": false,
+        "requiredKeys": [
+          "session_id",
+          "cwd",
+          "hook_event_name",
+          "transcript_path",
+          "task_id",
+          "task_subject"
+        ]
+      }
+    },
+    "TaskCompleted": {
+      "matcherTargets": {
+        "kind": "none"
+      },
+      "blockable": true,
+      "honorsExit2": true,
+      "jsonDecisions": [],
+      "exitCodeEffects": [
+        {
+          "exitCode": 2,
+          "effect": "block",
+          "stderrTo": "claude"
+        },
+        {
+          "exitCode": 1,
+          "effect": "non-blocking-error",
+          "stderrTo": "user"
+        }
+      ],
+      "payloadShape": {
+        "verified": false,
+        "requiredKeys": [
+          "session_id",
+          "cwd",
+          "hook_event_name",
+          "transcript_path",
+          "task_id",
+          "task_subject"
+        ]
+      }
+    },
+    "Stop": {
+      "matcherTargets": {
+        "kind": "none"
+      },
+      "blockable": true,
+      "honorsExit2": true,
+      "jsonDecisions": ["block"],
+      "exitCodeEffects": [
+        {
+          "exitCode": 2,
+          "effect": "block",
+          "stderrTo": "claude"
+        },
+        {
+          "exitCode": 1,
+          "effect": "non-blocking-error",
+          "stderrTo": "user"
+        }
+      ],
+      "payloadShape": {
+        "verified": false,
+        "requiredKeys": [
+          "session_id",
+          "cwd",
+          "hook_event_name",
+          "transcript_path",
+          "stop_hook_active",
+          "last_assistant_message",
+          "background_tasks",
+          "session_crons"
+        ]
+      }
+    },
+    "StopFailure": {
+      "matcherTargets": {
+        "kind": "enum",
+        "field": "error",
+        "values": [
+          "rate_limit",
+          "overloaded",
+          "authentication_failed",
+          "oauth_org_not_allowed",
+          "billing_error",
+          "invalid_request",
+          "model_not_found",
+          "server_error",
+          "max_output_tokens",
+          "unknown"
+        ]
+      },
+      "blockable": false,
+      "honorsExit2": false,
+      "jsonDecisions": [],
+      "exitCodeEffects": [
+        {
+          "exitCode": 2,
+          "effect": "ignored",
+          "stderrTo": "ignored"
+        },
+        {
+          "exitCode": 1,
+          "effect": "ignored",
+          "stderrTo": "ignored"
+        }
+      ],
+      "payloadShape": {
+        "verified": false,
+        "requiredKeys": [
+          "session_id",
+          "cwd",
+          "hook_event_name",
+          "transcript_path",
+          "error"
+        ]
+      }
+    },
+    "TeammateIdle": {
+      "matcherTargets": {
+        "kind": "none"
+      },
+      "blockable": true,
+      "honorsExit2": true,
+      "jsonDecisions": [],
+      "exitCodeEffects": [
+        {
+          "exitCode": 2,
+          "effect": "block",
+          "stderrTo": "claude"
+        },
+        {
+          "exitCode": 1,
+          "effect": "non-blocking-error",
+          "stderrTo": "user"
+        }
+      ],
+      "payloadShape": {
+        "verified": false,
+        "requiredKeys": [
+          "session_id",
+          "cwd",
+          "hook_event_name",
+          "transcript_path",
+          "teammate_name"
+        ]
+      }
+    },
+    "ConfigChange": {
+      "matcherTargets": {
+        "kind": "enum",
+        "field": "source",
+        "values": [
+          "user_settings",
+          "project_settings",
+          "local_settings",
+          "policy_settings",
+          "skills"
+        ]
+      },
+      "blockable": true,
+      "honorsExit2": true,
+      "jsonDecisions": ["block"],
+      "exitCodeEffects": [
+        {
+          "exitCode": 2,
+          "effect": "block",
+          "stderrTo": "user"
+        },
+        {
+          "exitCode": 1,
+          "effect": "non-blocking-error",
+          "stderrTo": "user"
+        }
+      ],
+      "payloadShape": {
+        "verified": false,
+        "requiredKeys": [
+          "session_id",
+          "cwd",
+          "hook_event_name",
+          "transcript_path",
+          "source"
+        ]
+      }
+    },
+    "CwdChanged": {
+      "matcherTargets": {
+        "kind": "none"
+      },
+      "blockable": false,
+      "honorsExit2": false,
+      "jsonDecisions": [],
+      "exitCodeEffects": [
+        {
+          "exitCode": 2,
+          "effect": "non-blocking-error",
+          "stderrTo": "user"
+        },
+        {
+          "exitCode": 1,
+          "effect": "non-blocking-error",
+          "stderrTo": "user"
+        }
+      ],
+      "payloadShape": {
+        "verified": false,
+        "requiredKeys": ["session_id", "cwd", "hook_event_name", "old_cwd", "new_cwd"]
+      }
+    },
+    "DirectoryAdded": {
+      "matcherTargets": {
+        "kind": "enum",
+        "field": "source",
+        "values": ["slash_command", "register_repo_root"]
+      },
+      "blockable": false,
+      "honorsExit2": false,
+      "jsonDecisions": [],
+      "exitCodeEffects": [
+        {
+          "exitCode": 2,
+          "effect": "non-blocking-error",
+          "stderrTo": "debug-log"
+        },
+        {
+          "exitCode": 1,
+          "effect": "non-blocking-error",
+          "stderrTo": "debug-log"
+        }
+      ],
+      "payloadShape": {
+        "verified": false,
+        "requiredKeys": [
+          "session_id",
+          "cwd",
+          "hook_event_name",
+          "transcript_path",
+          "directory",
+          "source"
+        ]
+      }
+    },
+    "FileChanged": {
+      "matcherTargets": {
+        "kind": "field",
+        "field": "file_path"
+      },
+      "blockable": false,
+      "honorsExit2": false,
+      "jsonDecisions": [],
+      "exitCodeEffects": [
+        {
+          "exitCode": 2,
+          "effect": "non-blocking-error",
+          "stderrTo": "user"
+        },
+        {
+          "exitCode": 1,
+          "effect": "non-blocking-error",
+          "stderrTo": "user"
+        }
+      ],
+      "payloadShape": {
+        "verified": false,
+        "requiredKeys": [
+          "session_id",
+          "cwd",
+          "hook_event_name",
+          "transcript_path",
+          "file_path",
+          "event"
+        ]
+      }
+    },
+    "WorktreeCreate": {
+      "matcherTargets": {
+        "kind": "none"
+      },
+      "blockable": true,
+      "honorsExit2": true,
+      "jsonDecisions": [],
+      "exitCodeEffects": [
+        {
+          "exitCode": 2,
+          "effect": "block",
+          "stderrTo": "user"
+        },
+        {
+          "exitCode": 1,
+          "effect": "block",
+          "stderrTo": "user"
+        }
+      ],
+      "payloadShape": {
+        "verified": false,
+        "requiredKeys": [
+          "session_id",
+          "cwd",
+          "hook_event_name",
+          "transcript_path",
+          "name"
+        ]
+      }
+    },
+    "WorktreeRemove": {
+      "matcherTargets": {
+        "kind": "none"
+      },
+      "blockable": false,
+      "honorsExit2": false,
+      "jsonDecisions": [],
+      "exitCodeEffects": [
+        {
+          "exitCode": 2,
+          "effect": "non-blocking-error",
+          "stderrTo": "debug-log"
+        },
+        {
+          "exitCode": 1,
+          "effect": "non-blocking-error",
+          "stderrTo": "debug-log"
+        }
+      ],
+      "payloadShape": {
+        "verified": false,
+        "requiredKeys": [
+          "session_id",
+          "cwd",
+          "hook_event_name",
+          "transcript_path",
+          "worktree_path"
+        ]
+      }
+    },
+    "PreCompact": {
+      "matcherTargets": {
+        "kind": "enum",
+        "field": "trigger",
+        "values": ["manual", "auto"]
+      },
+      "blockable": true,
+      "honorsExit2": true,
+      "jsonDecisions": ["block"],
+      "exitCodeEffects": [
+        {
+          "exitCode": 2,
+          "effect": "block",
+          "stderrTo": "user"
+        },
+        {
+          "exitCode": 1,
+          "effect": "non-blocking-error",
+          "stderrTo": "user"
+        }
+      ],
+      "payloadShape": {
+        "verified": false,
+        "requiredKeys": [
+          "session_id",
+          "cwd",
+          "hook_event_name",
+          "transcript_path",
+          "trigger"
+        ]
+      }
+    },
+    "PostCompact": {
+      "matcherTargets": {
+        "kind": "enum",
+        "field": "trigger",
+        "values": ["manual", "auto"]
+      },
+      "blockable": false,
+      "honorsExit2": false,
+      "jsonDecisions": [],
+      "exitCodeEffects": [
+        {
+          "exitCode": 2,
+          "effect": "non-blocking-error",
+          "stderrTo": "user"
+        },
+        {
+          "exitCode": 1,
+          "effect": "non-blocking-error",
+          "stderrTo": "user"
+        }
+      ],
+      "payloadShape": {
+        "verified": false,
+        "requiredKeys": [
+          "session_id",
+          "cwd",
+          "hook_event_name",
+          "transcript_path",
+          "trigger",
+          "compact_summary"
+        ]
+      }
+    },
+    "PreModelSwitch": {
+      "matcherTargets": {
+        "kind": "field",
+        "field": "to_model"
+      },
+      "blockable": true,
+      "honorsExit2": true,
+      "jsonDecisions": ["allow", "deny", "ask", "block"],
+      "exitCodeEffects": [
+        {
+          "exitCode": 2,
+          "effect": "block",
+          "stderrTo": "user"
+        },
+        {
+          "exitCode": 1,
+          "effect": "non-blocking-error",
+          "stderrTo": "user"
+        }
+      ],
+      "payloadShape": {
+        "verified": false,
+        "requiredKeys": [
+          "session_id",
+          "cwd",
+          "hook_event_name",
+          "transcript_path",
+          "from_model",
+          "to_model",
+          "requested_model",
+          "source",
+          "context_tokens",
+          "prompt_cache_warm",
+          "cache_ttl",
+          "estimated_cache_write_usd",
+          "pricing"
+        ]
+      }
+    },
+    "PostModelSwitch": {
+      "matcherTargets": {
+        "kind": "field",
+        "field": "to_model"
+      },
+      "blockable": false,
+      "honorsExit2": false,
+      "jsonDecisions": [],
+      "exitCodeEffects": [
+        {
+          "exitCode": 2,
+          "effect": "non-blocking-error",
+          "stderrTo": "user"
+        },
+        {
+          "exitCode": 1,
+          "effect": "non-blocking-error",
+          "stderrTo": "user"
+        }
+      ],
+      "payloadShape": {
+        "verified": false,
+        "requiredKeys": [
+          "session_id",
+          "cwd",
+          "hook_event_name",
+          "transcript_path",
+          "from_model",
+          "to_model",
+          "requested_model",
+          "source"
+        ]
+      }
+    },
+    "SessionEnd": {
+      "matcherTargets": {
+        "kind": "enum",
+        "field": "reason",
+        "values": ["clear", "resume", "logout", "prompt_input_exit", "other"]
+      },
+      "blockable": false,
+      "honorsExit2": false,
+      "jsonDecisions": [],
+      "exitCodeEffects": [
+        {
+          "exitCode": 2,
+          "effect": "non-blocking-error",
+          "stderrTo": "user"
+        },
+        {
+          "exitCode": 1,
+          "effect": "non-blocking-error",
+          "stderrTo": "user"
+        }
+      ],
+      "payloadShape": {
+        "verified": false,
+        "requiredKeys": [
+          "session_id",
+          "cwd",
+          "hook_event_name",
+          "transcript_path",
+          "reason"
+        ]
+      }
+    },
+    "Elicitation": {
+      "matcherTargets": {
+        "kind": "field",
+        "field": "mcp_server_name"
+      },
+      "blockable": true,
+      "honorsExit2": true,
+      "jsonDecisions": ["accept", "decline", "cancel"],
+      "exitCodeEffects": [
+        {
+          "exitCode": 2,
+          "effect": "block",
+          "stderrTo": "claude"
+        },
+        {
+          "exitCode": 1,
+          "effect": "non-blocking-error",
+          "stderrTo": "user"
+        }
+      ],
+      "payloadShape": {
+        "verified": false,
+        "requiredKeys": [
+          "session_id",
+          "cwd",
+          "hook_event_name",
+          "mcp_server_name",
+          "message"
+        ]
+      }
+    },
+    "ElicitationResult": {
+      "matcherTargets": {
+        "kind": "field",
+        "field": "mcp_server_name"
+      },
+      "blockable": true,
+      "honorsExit2": true,
+      "jsonDecisions": ["accept", "decline", "cancel"],
+      "exitCodeEffects": [
+        {
+          "exitCode": 2,
+          "effect": "block",
+          "stderrTo": "claude"
+        },
+        {
+          "exitCode": 1,
+          "effect": "non-blocking-error",
+          "stderrTo": "user"
+        }
+      ],
+      "payloadShape": {
+        "verified": false,
+        "requiredKeys": [
+          "session_id",
+          "cwd",
+          "hook_event_name",
+          "mcp_server_name",
+          "action"
+        ]
+      }
+    }
+  },
+  "matcherTable": [
+    {
+      "event": "PreToolUse",
+      "matcher": "Bash",
+      "matches": ["Bash"],
+      "doesNotMatch": ["PowerShell"],
+      "sinceVersion": null
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "Edit|Write",
+      "matches": ["Edit", "Write"],
+      "doesNotMatch": ["NotebookEdit"],
+      "sinceVersion": null
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "Edit, Write",
+      "matches": ["Edit", "Write"],
+      "doesNotMatch": ["Read"],
+      "sinceVersion": "2.1.191"
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "^Notebook",
+      "matches": ["NotebookEdit"],
+      "doesNotMatch": ["Edit"],
+      "sinceVersion": null
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "^Edit$",
+      "matches": ["Edit"],
+      "doesNotMatch": ["NotebookEdit"],
+      "sinceVersion": null
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "mcp__memory__.*",
+      "matches": ["mcp__memory__create_entities"],
+      "doesNotMatch": ["mcp__filesystem__read_file"],
+      "sinceVersion": null
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "mcp__brave-search__.*",
+      "matches": ["mcp__brave-search__web_search"],
+      "doesNotMatch": ["mcp__memory__create_entities"],
+      "sinceVersion": "2.1.195"
+    },
+    {
+      "event": "PostToolUse",
+      "matcher": "Edit|Write",
+      "matches": ["Edit", "Write"],
+      "doesNotMatch": ["Bash"],
+      "sinceVersion": null
+    },
+    {
+      "event": "PermissionRequest",
+      "matcher": "Bash",
+      "matches": ["Bash"],
+      "doesNotMatch": ["Edit"],
+      "sinceVersion": null
+    },
+    {
+      "event": "PermissionDenied",
+      "matcher": "Bash",
+      "matches": ["Bash"],
+      "doesNotMatch": ["Edit"],
+      "sinceVersion": null
+    },
+    {
+      "event": "SessionStart",
+      "matcher": "startup",
+      "matches": ["startup"],
+      "doesNotMatch": ["resume"],
+      "sinceVersion": null
+    },
+    {
+      "event": "Setup",
+      "matcher": "init",
+      "matches": ["init"],
+      "doesNotMatch": ["maintenance"],
+      "sinceVersion": null
+    },
+    {
+      "event": "SessionEnd",
+      "matcher": "clear",
+      "matches": ["clear"],
+      "doesNotMatch": ["resume"],
+      "sinceVersion": null
+    },
+    {
+      "event": "Notification",
+      "matcher": "permission_prompt",
+      "matches": ["permission_prompt"],
+      "doesNotMatch": ["idle_prompt"],
+      "sinceVersion": null
+    },
+    {
+      "event": "SubagentStart",
+      "matcher": "Explore",
+      "matches": ["Explore"],
+      "doesNotMatch": ["Plan"],
+      "sinceVersion": null
+    },
+    {
+      "event": "SubagentStart",
+      "matcher": "^my-plugin:reviewer$",
+      "matches": ["my-plugin:reviewer"],
+      "doesNotMatch": ["reviewer"],
+      "sinceVersion": null
+    },
+    {
+      "event": "SubagentStop",
+      "matcher": "Explore",
+      "matches": ["Explore"],
+      "doesNotMatch": ["Plan"],
+      "sinceVersion": null
+    },
+    {
+      "event": "ConfigChange",
+      "matcher": "skills",
+      "matches": ["skills"],
+      "doesNotMatch": ["policy_settings"],
+      "sinceVersion": null
+    },
+    {
+      "event": "DirectoryAdded",
+      "matcher": "slash_command",
+      "matches": ["slash_command"],
+      "doesNotMatch": ["register_repo_root"],
+      "sinceVersion": null
+    },
+    {
+      "event": "FileChanged",
+      "matcher": ".envrc|.env",
+      "matches": [".envrc", ".env"],
+      "doesNotMatch": ["data.csv"],
+      "sinceVersion": null
+    },
+    {
+      "event": "StopFailure",
+      "matcher": "rate_limit",
+      "matches": ["rate_limit"],
+      "doesNotMatch": ["overloaded"],
+      "sinceVersion": null
+    },
+    {
+      "event": "InstructionsLoaded",
+      "matcher": "session_start",
+      "matches": ["session_start"],
+      "doesNotMatch": ["compact"],
+      "sinceVersion": null
+    },
+    {
+      "event": "InstructionsLoaded",
+      "matcher": "path_glob_match|nested_traversal",
+      "matches": ["path_glob_match", "nested_traversal"],
+      "doesNotMatch": ["include"],
+      "sinceVersion": null
+    },
+    {
+      "event": "PreCompact",
+      "matcher": "manual",
+      "matches": ["manual"],
+      "doesNotMatch": ["auto"],
+      "sinceVersion": null
+    },
+    {
+      "event": "PostCompact",
+      "matcher": "auto",
+      "matches": ["auto"],
+      "doesNotMatch": ["manual"],
+      "sinceVersion": null
+    },
+    {
+      "event": "PreModelSwitch",
+      "matcher": "claude-opus-5",
+      "matches": ["claude-opus-5"],
+      "doesNotMatch": ["claude-sonnet-5"],
+      "sinceVersion": null
+    },
+    {
+      "event": "PreModelSwitch",
+      "matcher": ".*opus.*",
+      "matches": ["claude-opus-5"],
+      "doesNotMatch": ["claude-sonnet-5"],
+      "sinceVersion": null
+    },
+    {
+      "event": "PostModelSwitch",
+      "matcher": "claude-opus-4-6|claude-opus-5",
+      "matches": ["claude-opus-4-6", "claude-opus-5"],
+      "doesNotMatch": ["claude-sonnet-5"],
+      "sinceVersion": null
+    },
+    {
+      "event": "UserPromptExpansion",
+      "matcher": "deploy",
+      "matches": ["deploy"],
+      "doesNotMatch": ["review"],
+      "sinceVersion": null
+    },
+    {
+      "event": "Elicitation",
+      "matcher": "my-mcp-server",
+      "matches": ["my-mcp-server"],
+      "doesNotMatch": ["other-server"],
+      "sinceVersion": null
+    },
+    {
+      "event": "ElicitationResult",
+      "matcher": "my-mcp-server",
+      "matches": ["my-mcp-server"],
+      "doesNotMatch": ["other-server"],
+      "sinceVersion": null
+    }
+  ]
+}
