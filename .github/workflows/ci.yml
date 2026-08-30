@@ -153,5 +153,10 @@ jobs:
         with:
           node-version: 20
 
+      # Launched with `node`, not `pnpm run`: pnpm 11 needs Node >=22.13 and
+      # crashes on a lower floor before the smoke checks start. Nothing here
+      # wants pnpm anyway -- with --pack-dir the script only spawns `node` and
+      # installs the consumer with npm, which is what a real consumer at this
+      # floor has.
       - name: Consume the packed artifact at the published Node floor
-        run: pnpm --config.runtime-on-fail=ignore run package:smoke -- --pack-dir .smoke
+        run: node scripts/package-smoke.mjs --pack-dir .smoke

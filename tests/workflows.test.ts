@@ -1316,9 +1316,11 @@ describe("workflow regression checks for repository automation", () => {
     expect(packageFloor).toContain("node-version: 20");
     expect(packageFloor).toContain("pnpm run build");
     expect(packageFloor).toContain("pnpm pack --pack-destination .smoke");
-    expect(packageFloor).toContain(
-      "pnpm --config.runtime-on-fail=ignore run package:smoke -- --pack-dir .smoke",
-    );
+    // `node`, not `pnpm run`: pnpm 11 requires Node >=22.13, so a floor below
+    // that never reaches the smoke checks. Asserted so the pnpm launcher
+    // cannot quietly come back.
+    expect(packageFloor).toContain("node scripts/package-smoke.mjs --pack-dir .smoke");
+    expect(packageFloor).not.toContain("pnpm run package:smoke");
     expect(packageFloor).toContain("pnpm install --frozen-lockfile");
   });
 });
