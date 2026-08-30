@@ -255,6 +255,47 @@ describe("runCli explain", () => {
     expect(result.stderr).toContain("NotARealEvent");
   });
 
+  it("treats a set-but-empty HOOKASSERT_CLAUDE_VERSION as no version at all", () => {
+    // A CI job that declares the variable without a value, or an
+    // `export HOOKASSERT_CLAUDE_VERSION="$(… || true)"` that produced
+    // nothing, must fall back to "undetermined" rather than failing the run.
+    const result = runCli(
+      ["explain", "PreToolUse", "Bash"],
+      "hookassert",
+      explainDeps({ env: { HOOKASSERT_CLAUDE_VERSION: "" } }),
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Claude Code version: undetermined");
+  });
+
+  it("names HOOKASSERT_CLAUDE_VERSION when the invalid version came from it", () => {
+    const result = runCli(
+      ["explain", "PreToolUse", "Bash"],
+      "hookassert",
+      explainDeps({ env: { HOOKASSERT_CLAUDE_VERSION: "not-a-version" } }),
+    );
+
+    expect(result.exitCode).toBe(4);
+    expect(result.stderr).toContain("HOOKASSERT_CLAUDE_VERSION");
+  });
+
+  it("exits 4 with ERR_USAGE on an unexpected extra positional argument", () => {
+    // `--settings a.json b.json` parses as one settings file plus a stray
+    // positional; accepting it silently would make `b.json` the matcher
+    // target and report a wrong firing set at exit 0.
+    const result = runCli(
+      ["explain", "PreToolUse", "Bash", "Write"],
+      "hookassert",
+      explainDeps(),
+    );
+
+    expect(result.exitCode).toBe(4);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("ERR_USAGE");
+    expect(result.stderr).toContain("Write");
+  });
+
   it("exits 4 with ERR_USAGE when --claude-version is not major.minor.patch", () => {
     const result = runCli(
       ["explain", "PreToolUse", "Bash", "--claude-version", "not-a-version"],
@@ -325,6 +366,35 @@ describe("runCli explain", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("[explicit]");
     expect(result.stdout).toContain("./scripts/explicit-guard.sh");
+  });
+
+  it("fails with ERR_SETTINGS_NOT_FOUND when a --settings file does not exist", () => {
+    // A missing *discovered* layer is not an error, but a file the caller
+    // named is: without this, a typo prints "Firing hooks: none" at exit 0 —
+    // a confident wrong answer from the command whose whole job is saying
+    // which hooks fire.
+    const result = runCli(
+      ["explain", "PreToolUse", "Bash", "--settings", "no-such-settings.json"],
+      "hookassert",
+      explainDeps({ cwd: PROJECT_WITH_HOOKS_DIR }),
+    );
+
+    expect(result.exitCode).toBe(5);
+    expect(result.stderr).toContain("ERR_SETTINGS_NOT_FOUND");
+    expect(result.stdout).toBe("");
+  });
+
+  it("keeps a missing discovered settings layer lenient", () => {
+    // The mirror of the case above: discovery naming a file that does not
+    // exist stays a zero-hook contribution, so the strictness added for
+    // --settings must not leak into the three well-known layers.
+    const result = runCli(
+      ["explain", "PreToolUse", "Bash"],
+      "hookassert",
+      explainDeps({ cwd: NO_SUCH_DIR }),
+    );
+
+    expect(result.exitCode).toBe(0);
   });
 
   it("rethrows a non-HookassertError rather than reporting it as a usage failure", () => {

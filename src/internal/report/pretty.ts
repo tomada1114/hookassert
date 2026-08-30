@@ -44,8 +44,12 @@ export function renderPretty(report: ExplainReport): string {
     lines.push("Firing hooks: none");
   } else {
     lines.push("Firing hooks:");
+    // A set, not a repeated `matcherIgnored.includes(hook)`: the lookup is
+    // by identity either way, but scanning the list per firing hook is
+    // quadratic in the size of a settings tree's firing set.
+    const ignored = new Set(report.matcherIgnored);
     for (const hook of report.firing) {
-      const ignoredNote = report.matcherIgnored.includes(hook)
+      const ignoredNote = ignored.has(hook)
         ? " (matcher ignored: this event has no matcher support)"
         : "";
       lines.push(`  ${describeHook(hook)}${ignoredNote}`);

@@ -1,13 +1,17 @@
 #!/usr/bin/env node
 
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
-import { HookassertError, UsageError } from "./internal/errors.js";
+import {
+  HookassertError,
+  SettingsNotFoundError,
+  UsageError,
+} from "./internal/errors.js";
 import { matchHooks, type VersionContext } from "./internal/matcher/index.js";
 import {
   buildReportHeader,
@@ -148,7 +152,8 @@ function usage(executable: string): string {
  * The `code` leads, because that is the half a wrapper script may branch on;
  * the prose after it may be reworded in a patch release. Not scoped to
  * `UsageError`: `explain` can also fail with a load error (`ERR_SETTINGS_PARSE`,
- * `ERR_SPEC_SCHEMA`, `ERR_SPEC_NOT_FOUND`) when a `--settings` file or the
+ * `ERR_SETTINGS_NOT_FOUND`, `ERR_SPEC_SCHEMA`, `ERR_SPEC_NOT_FOUND`) when a
+ * `--settings` file or the
  * shipped spec cannot be read, and both report through this same shape.
  */
 function failureResult(error: HookassertError, executable: string): CliResult {
@@ -201,6 +206,13 @@ function resolveDeps(overrides: Partial<CliDeps>): CliDeps {
  * recorded version, are both `#11`'s work, and adding either here would spawn
  * a process from a command whose whole point is guaranteeing it never does.
  *
+ * An environment variable that is set but empty counts as absent, not as a
+ * malformed version: `HOOKASSERT_CLAUDE_VERSION=` in a CI job, or an
+ * `export HOOKASSERT_CLAUDE_VERSION="$(… || true)"` that produced nothing, is
+ * the caller declaring the variable without a value, and must fall through to
+ * `"undetermined"` rather than failing the run. `--claude-version ""` is still
+ * an error: an explicitly passed flag was meant to carry a version.
+ *
  * @throws {UsageError} `claudeVersionFlag` (or the environment variable, when
  * the flag is absent) is not a `major.minor.patch` string.
  */
@@ -208,15 +220,22 @@ function resolveVersionContext(
   claudeVersionFlag: string | undefined,
   env: Readonly<Record<string, string | undefined>>,
 ): VersionContext {
-  const text = claudeVersionFlag ?? env[CLAUDE_VERSION_ENV_VAR];
+  const fromEnv = env[CLAUDE_VERSION_ENV_VAR];
+  const text =
+    claudeVersionFlag ??
+    (fromEnv === undefined || fromEnv === "" ? undefined : fromEnv);
   if (text === undefined) {
     return { kind: "undetermined" };
   }
   try {
     return { kind: "known", version: parseClaudeVersion(text) };
   } catch {
+    // Naming the source matters: a stale environment variable otherwise
+    // produces a usage error quoting a value the caller never typed.
+    const source =
+      claudeVersionFlag === undefined ? CLAUDE_VERSION_ENV_VAR : "--claude-version";
     throw new UsageError(
-      `"${text}" is not a valid major.minor.patch Claude Code version.`,
+      `${source}: "${text}" is not a valid major.minor.patch Claude Code version.`,
     );
   }
 }
@@ -253,6 +272,16 @@ function runExplain(args: readonly string[], deps: CliDeps): CliResult {
   if (event === undefined) {
     throw new UsageError("explain requires an <event> argument.");
   }
+  if (parsed.positionals.length > 2) {
+    // Not cosmetic: `--settings a.json b.json` parses as one settings file
+    // plus a stray positional, so silently dropping the extras would let
+    // `b.json` become the matcher target and report a plausible — but
+    // wrong — firing set at exit 0.
+    throw new UsageError(
+      `explain accepts at most <event> and [tool]; unexpected extra argument ` +
+        `${JSON.stringify(parsed.positionals[2])}.`,
+    );
+  }
   if (!isEventName(event)) {
     throw new UsageError(
       `unrecognized event ${JSON.stringify(event)}. ` +
@@ -277,6 +306,16 @@ function runExplain(args: readonly string[], deps: CliDeps): CliResult {
   const spec = loadSpecFile(SPEC_PATH);
 
   const explicitSettings = parsed.values.settings;
+  // The loader maps a missing settings file to zero hooks, which is right for
+  // the three discovered layers and wrong for one the caller named: a typo
+  // would otherwise print "Firing hooks: none" at exit 0. This is the only
+  // layer that can tell the two apart.
+  for (const file of explicitSettings ?? []) {
+    const resolved = path.resolve(deps.cwd, file);
+    if (!existsSync(resolved)) {
+      throw new SettingsNotFoundError(resolved);
+    }
+  }
   const sources = discoverSources({
     cwd: deps.cwd,
     home: deps.home,
