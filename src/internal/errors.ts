@@ -155,3 +155,42 @@ export class SpecNotFoundError extends HookassertError {
     this.file = file;
   }
 }
+
+/**
+ * Thrown when a settings file named explicitly on the command line does not
+ * exist on disk.
+ *
+ * @remarks
+ * Deliberately narrower than it looks. A *discovered* settings file that is
+ * missing contributes zero hooks and is not an error — most projects declare
+ * only one or two of the three well-known layers, which is why
+ * `settings/load.ts` maps `ENOENT` to an empty hook list.
+ *
+ * A file the caller named is the opposite case: they asserted it exists, so
+ * silently reading zero hooks out of a typo turns `explain` into a tool that
+ * confidently reports "no hooks fire" for a settings file it never opened.
+ * Only the CLI can tell the two apart, because only the CLI knows which
+ * sources came from the user rather than from discovery.
+ *
+ * Mirrors {@link SpecNotFoundError}: the file's *content* is never inspected
+ * here because there is no content to read.
+ */
+export class SettingsNotFoundError extends HookassertError {
+  /** Stable discriminator, unchanged across non-breaking releases. */
+  readonly code = "ERR_SETTINGS_NOT_FOUND" as const;
+
+  /** Settings not-found failures always exit 5 (load error). */
+  readonly exitCode = 5;
+
+  /** Path that was named on the command line but does not exist. */
+  readonly file: string;
+
+  /**
+   * @param file - Path that was named on the command line but does not exist.
+   */
+  constructor(file: string) {
+    super(`Settings file not found: ${file}`);
+    this.name = "SettingsNotFoundError";
+    this.file = file;
+  }
+}
