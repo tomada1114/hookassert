@@ -34,9 +34,12 @@ tests (`type-testing`), the shape of the error classes a test asserts against
 Assert the error class and its stable `code`, never the message text:
 
 ```ts
-expect(() => fn()).toThrow(InvalidInputError);
-await expect(promise).rejects.toThrow(TimeoutError);
+expect(() => fn()).toThrow(UsageError);
+expect(caught.code).toBe("ERR_USAGE");
 ```
+
+A CLI failure is observed through the command's own result rather than a thrown error:
+assert the exit code and that stderr carries the `code`, never the prose around it.
 
 **BACKGROUND:** `designing-errors` explains why `message` is not a contract.
 
@@ -114,7 +117,7 @@ across it.
 No real `setTimeout` or sleep: `vi.useFakeTimers()` plus
 `await vi.advanceTimersByTimeAsync(ms)`, restored with `vi.useRealTimers()`. An
 abortable API is tested for the caller-visible effect of the abort and for the timer and
-listener it removes, on both outcomes — `tests/timeout.test.ts` is the model.
+listener it removes, on both outcomes — never only the one where it fires.
 
 ## Anti-patterns
 
