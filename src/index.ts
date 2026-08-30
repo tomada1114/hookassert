@@ -19,4 +19,13 @@
  * @packageDocumentation
  */
 
-export type { EventName, Provenance, ResolvedHook, SettingsLayer } from "./types.js";
+export type {
+  Decision,
+  EventName,
+  ExecOutcome,
+  Provenance,
+  ResolvedHook,
+  SettingsLayer,
+  UnknownReason,
+  VersionSourceName,
+} from "./types.js";
