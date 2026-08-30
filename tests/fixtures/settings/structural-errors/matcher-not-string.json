@@ -1,0 +1,10 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": 5,
+        "hooks": [{ "type": "command", "command": "./x.sh" }]
+      }
+    ]
+  }
+}

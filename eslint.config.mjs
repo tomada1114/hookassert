@@ -346,6 +346,36 @@ export default defineConfig([
     },
   },
   {
+    // `boundaries/internal-is-not-importable`'s own message says a test
+    // "reaches [src/internal/] through the public surface in src/index.ts" —
+    // true once a static-layer module is wired into the CLI, but every
+    // static module (settings, spec, matcher, fixture, decision, assert,
+    // lint, report) is built and TDD'd in its own issue *before* the
+    // cli-explain issue that wires it up, and `src/index.ts` can never
+    // re-export anything under `./internal/` at all (see
+    // `public-api/internal-stays-private` above) — there is no public
+    // surface for these modules to reach through yet, and never will be one
+    // for their internal types. Without this narrow exception a static
+    // module's own dedicated unit test could not import it, and `src/**`'s
+    // coverage floor (see `vitest.config.ts`) would fail on every line the
+    // untested module added, for as long as that module has no consumer.
+    //
+    // This is deliberately an explicit per-file allowlist, the same shape as
+    // `vitest.config.ts`'s `automationTests` list, rather than a directory
+    // glob: each static module's own test file is added here individually,
+    // by name, when it is created — never a blanket carve-out for
+    // `tests/**/*.ts`, and never for `scripts/**/*.mjs`, which
+    // `boundaries/internal-is-not-importable` continues to cover in full.
+    // `boundaries.test.ts` asserts the general rule is still registered and
+    // still reaches every static directory; nothing here narrows that
+    // assertion, only what a handful of named files may additionally do.
+    name: "tests/static-layer-unit-tests",
+    files: ["tests/settings.test.ts"],
+    rules: {
+      "no-restricted-imports": "off",
+    },
+  },
+  {
     name: "boundaries/static-does-not-reach-dynamic",
     files: STATIC_LAYER.map((directory) => `src/internal/${directory}/**/*.ts`),
     rules: {
