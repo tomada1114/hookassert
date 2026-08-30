@@ -128,8 +128,8 @@ export default defineConfig({
         },
         // Raised to 90 by issue #22, mainly by giving check-package.mjs's
         // `main` an injectable repository root (matching sync-agents.mjs's
-        // and sync-labels.mjs's own `main(argv, root = ...)` shape) so its
-        // publishable and rejection paths could be driven in-process, plus
+        // own `main(argv, root = ...)` shape) so its publishable and
+        // rejection paths could be driven in-process, plus
         // real coverage for smoke-package.mjs's and package-smoke.mjs's own
         // argument parsing and error paths, sync-labels.mjs's spawnGh, and
         // several small defensive branches (is-main.mjs, tarball.mjs,
