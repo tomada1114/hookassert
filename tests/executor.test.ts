@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -170,17 +171,19 @@ describe("faithful spawn forms", () => {
       command: `${shQuote(process.execPath)} ${shQuote(scriptPath)} $HOOKASSERT_TEST_VAR`,
       args: undefined,
     });
-    const [shellOutcome] = await executeHooks(deps, makePlan([makeStep(shellHook)]));
-    expect(shellOutcome).toBeDefined();
-    expect(JSON.parse(shellOutcome?.stdout ?? "[]")).toEqual(["expanded-value"]);
+    const [shellResult] = await executeHooks(deps, makePlan([makeStep(shellHook)]));
+    expect(shellResult).toBeDefined();
+    expect(JSON.parse(shellResult?.outcome.stdout ?? "[]")).toEqual(["expanded-value"]);
 
     const execHook = makeHook({
       command: process.execPath,
       args: [scriptPath, "$HOOKASSERT_TEST_VAR"],
     });
-    const [execOutcome] = await executeHooks(deps, makePlan([makeStep(execHook)]));
-    expect(execOutcome).toBeDefined();
-    expect(JSON.parse(execOutcome?.stdout ?? "[]")).toEqual(["$HOOKASSERT_TEST_VAR"]);
+    const [execResult] = await executeHooks(deps, makePlan([makeStep(execHook)]));
+    expect(execResult).toBeDefined();
+    expect(JSON.parse(execResult?.outcome.stdout ?? "[]")).toEqual([
+      "$HOOKASSERT_TEST_VAR",
+    ]);
   });
 });
 
@@ -247,10 +250,47 @@ describe("environment allowlist", () => {
     expect(withRequest).toEqual({ AWS_SECRET_ACCESS_KEY: "leaked-if-present" });
   });
 
-  it("a credential-shaped name in providedKeys is dropped even though allowedKeys would let it through", () => {
+  it("a credential-shaped name in providedKeys alone (not allowlisted) is dropped", () => {
     const processEnv = { AWS_SECRET_ACCESS_KEY: "leaked-if-present" };
     const env = buildHookEnv(processEnv, "/root", ["AWS_SECRET_ACCESS_KEY"], []);
     expect(env).not.toHaveProperty("AWS_SECRET_ACCESS_KEY");
+  });
+
+  it("a credential-shaped name present in both providedKeys and allowedKeys is included: explicit allowlisting wins over credential-shape filtering", () => {
+    const processEnv = { AWS_SECRET_ACCESS_KEY: "leaked-if-present" };
+    const env = buildHookEnv(
+      processEnv,
+      "/root",
+      ["AWS_SECRET_ACCESS_KEY"],
+      ["AWS_SECRET_ACCESS_KEY"],
+    );
+    expect(env).toEqual({ AWS_SECRET_ACCESS_KEY: "leaked-if-present" });
+  });
+
+  it("PATH is included in the built env by default, so exec form and shell form resolve the same bare command name identically", async () => {
+    const deps = makeDeps({
+      spawner: new NodeSpawner(),
+      processEnv: { PATH: process.env["PATH"] ?? "" },
+    });
+
+    const shellHook = makeHook({ command: "true", args: undefined });
+    const [shellResult] = await executeHooks(deps, makePlan([makeStep(shellHook)]));
+
+    const execHook = makeHook({ command: "true", args: [] });
+    const [execResult] = await executeHooks(deps, makePlan([makeStep(execHook)]));
+
+    expect(shellResult?.outcome.exitCode).toBe(0);
+    expect(execResult?.outcome.exitCode).toBe(0);
+  });
+
+  it("an allowlisted CLAUDE_PROJECT_DIR does not override the synthesized value", () => {
+    const env = buildHookEnv(
+      { CLAUDE_PROJECT_DIR: "/outer/session/root" },
+      "/resolved/project/root",
+      REAL_SPEC.hookEnv.provided,
+      ["CLAUDE_PROJECT_DIR"],
+    );
+    expect(env["CLAUDE_PROJECT_DIR"]).toBe("/resolved/project/root");
   });
 });
 
@@ -280,14 +320,14 @@ describe("cwd", () => {
     });
     const hook = makeHook({ command: process.execPath, args: [scriptPath] });
 
-    const [defaultOutcome] = await executeHooks(deps, makePlan([makeStep(hook)]));
-    expect(defaultOutcome?.stdout).toBe(projectRoot);
+    const [defaultResult] = await executeHooks(deps, makePlan([makeStep(hook)]));
+    expect(defaultResult?.outcome.stdout).toBe(projectRoot);
 
-    const [overriddenOutcome] = await executeHooks(
+    const [overriddenResult] = await executeHooks(
       deps,
       makePlan([makeStep(hook, { cwd: overrideDir })]),
     );
-    expect(overriddenOutcome?.stdout).toBe(overrideDir);
+    expect(overriddenResult?.outcome.stdout).toBe(overrideDir);
   });
 });
 
@@ -341,9 +381,38 @@ describe("timeout", () => {
       timeoutMs: 150,
     });
     const deps = makeDeps({ spawner: new NodeSpawner() });
-    const [outcome] = await executeHooks(deps, makePlan([makeStep(hook)]));
+    const [result] = await executeHooks(deps, makePlan([makeStep(hook)]));
 
-    expect(outcome?.timedOut).toBe(true);
+    expect(result?.outcome.timedOut).toBe(true);
+  });
+
+  it("a shell-form command whose grandchild survives the direct child's kill still settles well under the sleep duration, and leaves no orphan behind", async () => {
+    // The sleep duration itself doubles as a unique marker: pgrep -f can
+    // then confirm afterward that no process still matches this exact
+    // command line, i.e. the whole process group was actually killed rather
+    // than only the direct `sh` child.
+    const marker = (5 + Math.random()).toFixed(4);
+    const hook = makeHook({
+      command: `echo start; sleep ${marker}`,
+      args: undefined,
+      timeoutMs: 200,
+    });
+    const deps = makeDeps({ spawner: new NodeSpawner() });
+
+    const startedAt = Date.now();
+    const [result] = await executeHooks(deps, makePlan([makeStep(hook)]));
+    const elapsedMs = Date.now() - startedAt;
+
+    expect(result?.outcome.timedOut).toBe(true);
+    // Comfortably under the 5+ second sleep, with headroom for process
+    // teardown; a spawner that only waits for "close" resolves near 5000ms.
+    expect(elapsedMs).toBeLessThan(2000);
+
+    // Give the OS a moment to finish reaping the killed processes before
+    // checking that none of them survived as an orphan.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const stillRunning = spawnSync("pgrep", ["-f", `sleep ${marker}`]);
+    expect(stillRunning.status).not.toBe(0);
   });
 });
 
@@ -361,7 +430,7 @@ describe("stub bypass", () => {
     );
 
     expect(outcomes).toHaveLength(2);
-    expect(outcomes[1]).toEqual({
+    expect(outcomes[1]?.outcome).toEqual({
       exitCode: 7,
       stdout: "",
       stderr: "",
@@ -415,12 +484,12 @@ describe("end to end: ExecOutcome feeds resolveDecision to the expected Decision
         args: [scriptPath, ...extraArgs],
       });
       const deps = makeDeps({ spawner: new NodeSpawner() });
-      const [outcome] = await executeHooks(deps, makePlan([makeStep(hook)]));
-      if (outcome === undefined) {
+      const [result] = await executeHooks(deps, makePlan([makeStep(hook)]));
+      if (result === undefined) {
         throw new Error("executeHooks returned no outcome for a single-step plan");
       }
 
-      const decision = resolveDecision(REAL_SPEC, "PreToolUse", outcome);
+      const decision = resolveDecision(REAL_SPEC, "PreToolUse", result.outcome);
       expect(decision.kind).toBe(expectedKind);
     },
   );
@@ -430,10 +499,10 @@ describe("Spawner never rejects", () => {
   it("NodeSpawner resolves with an ExecOutcome even for a command that cannot be found", async () => {
     const hook = makeHook({ command: "/no/such/hookassert-fixture-binary", args: [] });
     const deps = makeDeps({ spawner: new NodeSpawner() });
-    const [outcome] = await executeHooks(deps, makePlan([makeStep(hook)]));
+    const [result] = await executeHooks(deps, makePlan([makeStep(hook)]));
 
-    expect(outcome).toBeDefined();
-    expect(outcome?.timedOut).toBe(false);
-    expect(outcome?.exitCode).not.toBe(0);
+    expect(result).toBeDefined();
+    expect(result?.outcome.timedOut).toBe(false);
+    expect(result?.outcome.exitCode).not.toBe(0);
   });
 });

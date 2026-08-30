@@ -22,6 +22,8 @@
  */
 
 import { spawn as spawnChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
+import process from "node:process";
 
 import type { ExecOutcome } from "../../types.js";
 
@@ -109,6 +111,19 @@ export function createUnimplementedSpawner(): Spawner {
  * (`resolveDecision` never reads `exitCode` once `timedOut` is set), so `-1`
  * is used as a harmless placeholder rather than `null` coerced into a number
  * that could be mistaken for a real exit status.
+ *
+ * The timeout kills the whole process group, not only the direct child, and
+ * settles the promise from the timer itself rather than waiting for
+ * `"close"`: a shell-form command whose command string is anything but a
+ * single simple word forks further children (`sh` only `exec`s in that one
+ * case), and those grandchildren inherit the direct child's stdio pipes.
+ * `"close"` fires only once every fd referencing those pipes is closed, so a
+ * surviving grandchild — orphaned by a plain `child.kill()`, which signals
+ * only the direct child — would otherwise hold `"close"`, and this promise,
+ * pending far past `req.timeoutMs`. Spawning `detached: true` puts the direct
+ * child in its own process group (`pgid === child.pid`), which every
+ * unrelocated descendant inherits, so `process.kill(-pid, "SIGKILL")` reaches
+ * the whole tree at once.
  */
 export class NodeSpawner implements Spawner {
   spawn(req: SpawnRequest): Promise<ExecOutcome> {
@@ -121,17 +136,13 @@ export class NodeSpawner implements Spawner {
       const child = spawnChildProcess(command, args, {
         cwd: req.cwd,
         env: req.env,
+        detached: true,
       });
 
       let stdout = "";
       let stderr = "";
       let timedOut = false;
       let settled = false;
-
-      const timer = setTimeout(() => {
-        timedOut = true;
-        child.kill("SIGKILL");
-      }, req.timeoutMs);
 
       const settle = (outcome: ExecOutcome): void => {
         if (settled) {
@@ -142,11 +153,24 @@ export class NodeSpawner implements Spawner {
         resolve(outcome);
       };
 
-      child.stdout.on("data", (chunk: Buffer) => {
-        stdout += chunk.toString("utf8");
+      const timer = setTimeout(() => {
+        timedOut = true;
+        killProcessGroup(child);
+        settle({ exitCode: -1, stdout, stderr, timedOut: true });
+      }, req.timeoutMs);
+
+      // `setEncoding` decodes the stream itself rather than each chunk
+      // independently: `Buffer#toString("utf8")` per chunk mangles a
+      // multi-byte character split across a chunk boundary into U+FFFD,
+      // while the stream's own decoder carries a split sequence's leftover
+      // bytes over to the next chunk.
+      child.stdout.setEncoding("utf8");
+      child.stderr.setEncoding("utf8");
+      child.stdout.on("data", (chunk: string) => {
+        stdout += chunk;
       });
-      child.stderr.on("data", (chunk: Buffer) => {
-        stderr += chunk.toString("utf8");
+      child.stderr.on("data", (chunk: string) => {
+        stderr += chunk;
       });
 
       // A process killed for a timeout, or one that never starts at all
@@ -173,5 +197,27 @@ export class NodeSpawner implements Spawner {
       });
       child.stdin.end(req.stdin);
     });
+  }
+}
+
+/**
+ * Kill `child`'s entire process group rather than only `child` itself.
+ *
+ * @remarks
+ * See the timeout remark on {@link NodeSpawner.spawn}. `process.kill` with a
+ * negated pid signals every process sharing that pgid; falls back to
+ * `child.kill()` when `child.pid` never got assigned (the process failed to
+ * start at all) or the group is already gone (e.g. `ESRCH` because the child
+ * had already exited on its own between the timer firing and this call).
+ */
+function killProcessGroup(child: ChildProcess): void {
+  if (child.pid === undefined) {
+    child.kill("SIGKILL");
+    return;
+  }
+  try {
+    process.kill(-child.pid, "SIGKILL");
+  } catch {
+    child.kill("SIGKILL");
   }
 }

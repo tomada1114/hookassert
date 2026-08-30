@@ -79,12 +79,33 @@ export function isCredentialShapedEnvKey(name: string): boolean {
 }
 
 /**
+ * Environment variables hookassert includes in every hook's environment by
+ * default, on top of whatever `spec.hookEnv.provided` names.
+ *
+ * @remarks
+ * `PATH` is not in the shipped spec's `hookEnv.provided` list — Claude Code
+ * itself never has to declare it, because a real Claude Code session's shell
+ * form (`/bin/sh -c`) inherits the outer process's own `PATH` regardless.
+ * Reproducing that without ever declaring it would make hookassert's two
+ * spawn forms disagree about the same command: exec form's process (spawned
+ * with no shell) sees exactly the built env and ENOENTs on a bare command
+ * name, while shell form's `/bin/sh` silently restores its own compiled-in
+ * default `PATH` and still resolves it. So hookassert declares `PATH` itself,
+ * as a named baseline constant rather than a `process.env` passthrough,
+ * which this issue's acceptance criterion forbids — both forms then resolve
+ * a bare command name identically instead of shell form depending on an
+ * implicit, machine-dependent shell default that exec form never gets.
+ */
+export const HOOKASSERT_DEFAULT_ENV_KEYS: readonly string[] = ["PATH"];
+
+/**
  * Build the environment a spawned hook actually runs with.
  *
  * @remarks
  * Never `process.env` passed through: every variable that ends up in the
- * result is either one of `providedKeys` (`spec.hookEnv.provided` — the
- * variables Claude Code itself gives every hook) or one of `allowedKeys`
+ * result is either one of {@link HOOKASSERT_DEFAULT_ENV_KEYS} (hookassert's
+ * own baseline), one of `providedKeys` (`spec.hookEnv.provided` — the
+ * variables Claude Code itself gives every hook), or one of `allowedKeys`
  * (the explicit allowlist a caller opted a variable into, e.g. through the
  * `--env` flag `test-cmd` wires up). A credential-shaped name in
  * `providedKeys` is dropped as a defense-in-depth measure — the shipped spec
@@ -96,7 +117,11 @@ export function isCredentialShapedEnvKey(name: string): boolean {
  * `CLAUDE_PROJECT_DIR` is synthesized from `projectRoot` rather than read
  * from `processEnv`: it is the one `hookEnv.provided` variable hookassert
  * itself knows the value of, since it names the very project root the run
- * resolved.
+ * resolved. That synthesized value always wins, even over an explicit
+ * `allowedKeys` entry — a caller running hookassert itself from inside a
+ * Claude Code session could otherwise pass the outer session's own
+ * `CLAUDE_PROJECT_DIR` through `--env`, silently defeating the synthesis with
+ * the wrong project root.
  */
 export function buildHookEnv(
   processEnv: Readonly<Record<string, string | undefined>>,
@@ -106,7 +131,7 @@ export function buildHookEnv(
 ): Readonly<Record<string, string>> {
   const env: Record<string, string> = {};
 
-  for (const key of providedKeys) {
+  for (const key of [...HOOKASSERT_DEFAULT_ENV_KEYS, ...providedKeys]) {
     if (isCredentialShapedEnvKey(key)) {
       continue;
     }
@@ -121,6 +146,11 @@ export function buildHookEnv(
   }
 
   for (const key of allowedKeys) {
+    if (key === "CLAUDE_PROJECT_DIR") {
+      // The synthesized value above always wins, regardless of the
+      // allowlist — see the remark above.
+      continue;
+    }
     // Explicitly allowlisted, so included even when credential-shaped.
     const value = processEnv[key];
     if (value !== undefined) {
@@ -225,6 +255,17 @@ function envForDeps(deps: ExecDeps): Readonly<Record<string, string>> {
  * Code's own faithful shell-form/exec-form split.
  *
  * @remarks
+ * `hook.timeoutMs ?? defaultTimeoutMs` deliberately applies
+ * {@link resolveDefaultTimeoutMs}'s ceiling only when the hook declares no
+ * timeout of its own. A hook's explicitly declared `timeoutMs` (from
+ * `settings.json`'s `timeout`, converted to milliseconds) is honored as-is,
+ * even when it exceeds hookassert's own default — hookassert's default exists
+ * to bound the case where nobody said how long is acceptable, not to
+ * second-guess a value the user actually wrote down. This is not an
+ * oversight: capping a hook's own declared timeout would make hookassert
+ * silently run *less* faithfully to Claude Code's real behavior than an
+ * uncapped one would.
+ *
  * A hook declared with no `args` (`hook.args === undefined`) launches via
  * shell form (`sh -c "<command>"`, `NodeSpawner`'s job to actually invoke);
  * a hook declared with `args` — including an explicitly empty list — launches
@@ -260,6 +301,15 @@ function stubbedOutcome(stub: FixtureStubEntry): ExecOutcome {
   return { exitCode: stub.exitCode, stdout: "", stderr: "", timedOut: false };
 }
 
+/** One executed step paired with the `ExecOutcome` it produced. */
+export interface ExecutionResult {
+  /** The step this outcome belongs to. */
+  readonly step: ExecutionStep;
+
+  /** What running (or stubbing) `step` produced. */
+  readonly outcome: ExecOutcome;
+}
+
 async function runStep(
   deps: ExecDeps,
   step: ExecutionStep,
@@ -273,7 +323,8 @@ async function runStep(
 
 /**
  * Run every step of `plan` whose event `plan.assertedEvents` actually
- * references, and report each one's `ExecOutcome`.
+ * references, and report each one's `ExecOutcome` paired with the step it
+ * belongs to.
  *
  * @remarks
  * A step for an event not in `plan.assertedEvents` is skipped before
@@ -282,12 +333,20 @@ async function runStep(
  * rather than a placeholder entry. Order among the steps that do run follows
  * `plan.steps`'s own order, but all of them run concurrently
  * (`Promise.all`): nothing about one step's outcome depends on another's.
+ *
+ * Each result carries its own `step` rather than being returned as a bare
+ * positional `ExecOutcome[]`: the array here is already filtered down from
+ * `plan.steps`, so a caller that only sees `plan.steps` (never the filtered
+ * list) cannot reliably index back from a returned outcome to the hook that
+ * produced it without re-deriving the identical filter.
  */
 export async function executeHooks(
   deps: ExecDeps,
   plan: ExecutionPlan,
-): Promise<readonly ExecOutcome[]> {
+): Promise<readonly ExecutionResult[]> {
   const env = envForDeps(deps);
   const relevant = plan.steps.filter((step) => plan.assertedEvents.has(step.event));
-  return Promise.all(relevant.map((step) => runStep(deps, step, env)));
+  return Promise.all(
+    relevant.map(async (step) => ({ step, outcome: await runStep(deps, step, env) })),
+  );
 }
