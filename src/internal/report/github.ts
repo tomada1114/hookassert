@@ -48,12 +48,21 @@ export interface ReportFinding {
  */
 export function relativizeForGithub(file: string, workspaceRoot: string): string {
   const isAbsolute = file.startsWith("/") || /^[A-Za-z]:[\\/]/.test(file);
+  const normalizedFile = file.split("\\").join("/");
   if (!isAbsolute) {
-    return file.split("\\").join("/");
+    return normalizedFile;
   }
-  const root = workspaceRoot.endsWith("/") ? workspaceRoot : `${workspaceRoot}/`;
-  const relative = file.startsWith(root) ? file.slice(root.length) : file;
-  return relative.split("\\").join("/");
+  const isWindowsPath = /^[A-Za-z]:\//.test(normalizedFile);
+  const normalizedRoot = workspaceRoot.split("\\").join("/");
+  const root = normalizedRoot.endsWith("/") ? normalizedRoot : `${normalizedRoot}/`;
+  // Normalize separators on both sides before comparing — a Windows caller may
+  // pass `file` or `workspaceRoot` (or both) with backslashes, and comparing
+  // before normalizing means a Windows absolute path never matches its root.
+  // Windows paths also compare case-insensitively, since its filesystem is.
+  const matches = isWindowsPath
+    ? normalizedFile.toLowerCase().startsWith(root.toLowerCase())
+    : normalizedFile.startsWith(root);
+  return matches ? normalizedFile.slice(root.length) : normalizedFile;
 }
 
 /**

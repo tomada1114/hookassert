@@ -41,6 +41,9 @@ const PROJECT_SETTINGS_FILE = path.join(
   ".claude",
   "settings.json",
 );
+const SETTINGS_FIXTURES_DIR = fileURLToPath(
+  new URL("./fixtures/settings/", import.meta.url),
+);
 
 /** The shipped spec's own declared range, from `spec/claude-code-2.1.251-2.2.0.json`. */
 const SPEC_RANGE = ">=2.1.251 <2.2.0";
@@ -143,6 +146,32 @@ describe("renderJson", () => {
     expect(validate(parsed)).toBe(false);
   });
 
+  it("stays schema-valid for a negative or fractional timeoutMs, since settings/load.ts does not reject either", () => {
+    // A settings file's `timeout` is an arbitrary JSON number multiplied by
+    // 1000; nothing in the pipeline rejects a negative or fractional value.
+    // The schema must describe what the tool can actually emit, not what a
+    // well-behaved settings file would contain.
+    const settings = loadSettings([
+      {
+        path: path.join(
+          SETTINGS_FIXTURES_DIR,
+          "with-negative-and-fractional-timeout",
+          "project.json",
+        ),
+        layer: "project",
+      },
+    ]);
+    const hooks = hooksForEvent(settings, "PreToolUse");
+    expect(hooks.map((hook) => hook.timeoutMs)).toEqual([-1000, 0.5]);
+
+    const report = baseReport({ firing: hooks });
+    const parsed: unknown = JSON.parse(renderJson(report));
+
+    const ajv = new Ajv({ allErrors: true, strict: false });
+    const validate = ajv.compile(readSchema() as object);
+    expect(validate(parsed)).toBe(true);
+  });
+
   it("includes the detected version, spec range, and incompleteness notices as data fields", () => {
     const report = baseReport({
       header: {
@@ -224,6 +253,24 @@ describe("relativizeForGithub", () => {
   it("normalizes a Windows-style backslash separator to a forward slash", () => {
     expect(relativizeForGithub("nested\\settings.json", "/workspace")).toBe(
       "nested/settings.json",
+    );
+  });
+
+  it("makes a Windows absolute path relative to a Windows workspace root", () => {
+    expect(relativizeForGithub("C:\\repo\\.claude\\settings.json", "C:\\repo")).toBe(
+      ".claude/settings.json",
+    );
+  });
+
+  it("handles a Windows workspace root with a trailing separator", () => {
+    expect(relativizeForGithub("C:\\repo\\.claude\\settings.json", "C:\\repo\\")).toBe(
+      ".claude/settings.json",
+    );
+  });
+
+  it("matches a Windows path against its root case-insensitively", () => {
+    expect(relativizeForGithub("c:\\Repo\\.claude\\settings.json", "C:\\repo")).toBe(
+      ".claude/settings.json",
     );
   });
 });

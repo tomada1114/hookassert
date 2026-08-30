@@ -15,6 +15,7 @@ import {
 import { matchHooks, type VersionContext } from "./internal/matcher/index.js";
 import {
   buildReportHeader,
+  isReportFormat,
   renderGithub,
   renderInFormat,
   renderJson,
@@ -294,6 +295,18 @@ function runExplain(args: readonly string[], deps: CliDeps): CliResult {
 
   if (parsed.values["emit-fixtures"] !== undefined) {
     throw new UsageError("the --emit-fixtures option is not implemented yet.");
+  }
+
+  // Validated here, before any I/O (version resolution, spec loading, the
+  // --settings existence check, loadSettings): a typo'd --format must fail
+  // as its own ERR_USAGE rather than surfacing as an unrelated I/O error
+  // once rendering is finally reached. `renderInFormat` below still owns the
+  // actual format-to-renderer selection, so that logic stays in one place.
+  if (parsed.values.format !== undefined && !isReportFormat(parsed.values.format)) {
+    throw new UsageError(
+      `unrecognized --format ${JSON.stringify(parsed.values.format)}. ` +
+        `Expected one of: pretty, json, github.`,
+    );
   }
 
   const versionContext = resolveVersionContext(
