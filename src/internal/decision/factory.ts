@@ -15,7 +15,7 @@ import type { Decision, UnknownReason } from "../../types.js";
 
 /** The action is blocked. */
 export function denied(
-  source: "exit-2" | "permission-decision",
+  source: "exit-code" | "permission-decision",
   exitCode: number,
 ): Decision {
   return { kind: "deny", source, exitCode };

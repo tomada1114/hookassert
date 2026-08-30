@@ -246,6 +246,22 @@ describe("UnknownReason", () => {
           }>();
           break;
         }
+        case "event-not-in-spec": {
+          expectTypeOf(reason).toEqualTypeOf<{
+            readonly kind: "event-not-in-spec";
+            readonly event: EventName;
+            readonly specVersion: string;
+          }>();
+          break;
+        }
+        case "contradictory-exit-code-effect": {
+          expectTypeOf(reason).toEqualTypeOf<{
+            readonly kind: "contradictory-exit-code-effect";
+            readonly event: EventName;
+            readonly exitCode: number;
+          }>();
+          break;
+        }
       }
     };
     narrow({
@@ -261,6 +277,16 @@ describe("UnknownReason", () => {
     });
     narrow({ kind: "plugin-hooks-present", files: [] });
     narrow({ kind: "managed-settings-assumed", path: "/etc/managed.json" });
+    narrow({
+      kind: "event-not-in-spec",
+      event: "PreToolUse",
+      specVersion: "1.0.0",
+    });
+    narrow({
+      kind: "contradictory-exit-code-effect",
+      event: "PostToolUse",
+      exitCode: 2,
+    });
   });
 
   it("rejects an event name outside EventName in payload-shape-unverified", () => {
@@ -284,7 +310,7 @@ describe("Decision", () => {
         case "deny": {
           expectTypeOf(decision).toEqualTypeOf<{
             readonly kind: "deny";
-            readonly source: "exit-2" | "permission-decision";
+            readonly source: "exit-code" | "permission-decision";
             readonly exitCode: number;
           }>();
           break;
@@ -321,7 +347,7 @@ describe("Decision", () => {
         }
       }
     };
-    narrow({ kind: "deny", source: "exit-2", exitCode: 2 });
+    narrow({ kind: "deny", source: "exit-code", exitCode: 2 });
     narrow({ kind: "allow", exitCode: 0 });
     narrow({ kind: "pass", exitCode: 1 });
     narrow({ kind: "error", exitCode: 127, cause: "nonzero-exit-without-json" });

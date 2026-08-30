@@ -232,6 +232,22 @@ export type UnknownReason =
       readonly kind: "managed-settings-assumed";
       /** Absolute path of the assumed managed settings file. */
       readonly path: string;
+    }
+  | {
+      /** `event` has no entry in the loaded spec's `events` map, so nothing about its documented behavior can be read — a hookassert build whose `EventName` union has drifted ahead of the spec file it loaded. */
+      readonly kind: "event-not-in-spec";
+      /** The event with no corresponding entry in the loaded spec. */
+      readonly event: EventName;
+      /** The loaded spec's own `specVersion`. */
+      readonly specVersion: string;
+    }
+  | {
+      /** The loaded spec documents a `block` effect for `exitCode` on `event` while also declaring `event` not `blockable` — the spec entry contradicts itself, so the hook's own output cannot be blamed for it. */
+      readonly kind: "contradictory-exit-code-effect";
+      /** The event whose spec entry contradicts itself. */
+      readonly event: EventName;
+      /** The exit code whose documented `block` effect the event's own `blockable: false` contradicts. */
+      readonly exitCode: number;
     };
 
 /**
@@ -248,14 +264,14 @@ export type Decision =
   | {
       /**
        * The action is blocked, either because the hook exited with the
-       * event's documented block-effect exit code (`source: "exit-2"`) or
-       * because its stdout JSON carried a recognized deny/block
-       * `permissionDecision` on a blockable event (`source:
+       * event's documented block-effect exit code (`source: "exit-code"`) or
+       * because its stdout JSON carried a recognized deny-shaped decision
+       * value on that event's own `jsonDecisions` (`source:
        * "permission-decision"`).
        */
       readonly kind: "deny";
       /** Which channel produced the deny. */
-      readonly source: "exit-2" | "permission-decision";
+      readonly source: "exit-code" | "permission-decision";
       /** The hook's raw exit code. */
       readonly exitCode: number;
     }

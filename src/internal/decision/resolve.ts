@@ -11,18 +11,49 @@
  * literals: the shipped spec documents at least one event (`WorktreeCreate`)
  * whose non-`2` exit code also blocks, so "exit 2 means deny" is only true
  * because that is what most events' `exitCodeEffects` happen to say, not
- * because `2` is special to this resolver.
+ * because `2` is special to this resolver. The JSON channel is gated the
+ * same way: whether a `permissionDecision`/`decision` value denies or allows
+ * is decided from the event's own `jsonDecisions`, never from `blockable` —
+ * `blockable` only ever describes the exit-code channel (it is defined as
+ * equal to `honorsExit2` for every one of the spec's 33 events), and several
+ * events (`PermissionRequest`, `PostToolUse`, `PostToolUseFailure`) deny
+ * exclusively through JSON while being `blockable: false`.
  */
 
 import type { Decision, EventName, ExecOutcome } from "../../types.js";
 import type { EventSpec, ExitCodeEffect, Spec } from "../spec/index.js";
 import { allowed, denied, errored, passed, unknownDecision } from "./factory.js";
 
-/** `permissionDecision` values that mean "block this action." */
-const DENY_VALUES: ReadonlySet<string> = new Set(["deny", "block"]);
+/**
+ * Words meaning "block this action," wherever an event's own `jsonDecisions`
+ * documents one of them.
+ */
+const DENY_SHAPED_WORDS: ReadonlySet<string> = new Set([
+  "deny",
+  "block",
+  "decline",
+  "cancel",
+]);
 
-/** `permissionDecision` values that mean "allow this action." */
-const ALLOW_VALUES: ReadonlySet<string> = new Set(["allow"]);
+/**
+ * Words meaning "allow this action," wherever an event's own `jsonDecisions`
+ * documents one of them.
+ */
+const ALLOW_SHAPED_WORDS: ReadonlySet<string> = new Set(["allow", "accept"]);
+
+/** The subset of `eventSpec.jsonDecisions` that are deny-shaped. */
+function denyValuesFor(eventSpec: EventSpec): ReadonlySet<string> {
+  return new Set(
+    eventSpec.jsonDecisions.filter((value) => DENY_SHAPED_WORDS.has(value)),
+  );
+}
+
+/** The subset of `eventSpec.jsonDecisions` that are allow-shaped. */
+function allowValuesFor(eventSpec: EventSpec): ReadonlySet<string> {
+  return new Set(
+    eventSpec.jsonDecisions.filter((value) => ALLOW_SHAPED_WORDS.has(value)),
+  );
+}
 
 function looksLikeJson(text: string): boolean {
   return text.startsWith("{") || text.startsWith("[");
@@ -32,6 +63,35 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/**
+ * Read the raw decision value out of a parsed stdout object, checking the
+ * locations Claude Code itself emits in order and returning the first one
+ * present:
+ *
+ * 1. `hookSpecificOutput.permissionDecision` — `PreToolUse`, `PermissionRequest`.
+ * 2. Top-level `decision` — the `jsonDecisions: ["block"]` events
+ *    (`UserPromptSubmit`, `Stop`, `PostToolUse`, ...).
+ * 3. Top-level `permissionDecision` — a fallback for any hook that emits the
+ *    field unnested.
+ *
+ * `undefined` means none of the three locations carry a value at all, which
+ * is not an error: a hook may validly emit JSON with no decision in it (a
+ * log line, a status payload).
+ */
+function readDecisionValue(record: Record<string, unknown>): unknown {
+  const hookSpecificOutput = record["hookSpecificOutput"];
+  if (isPlainRecord(hookSpecificOutput) && "permissionDecision" in hookSpecificOutput) {
+    return hookSpecificOutput["permissionDecision"];
+  }
+  if ("decision" in record) {
+    return record["decision"];
+  }
+  if ("permissionDecision" in record) {
+    return record["permissionDecision"];
+  }
+  return undefined;
+}
+
 type JsonDecision =
   | { readonly kind: "none" }
   | { readonly kind: "malformed" }
@@ -39,15 +99,13 @@ type JsonDecision =
   | { readonly kind: "decision"; readonly value: string };
 
 /**
- * Read a hook's stdout for a `permissionDecision` value valid for `event`.
+ * Read a hook's stdout for a decision value valid for `event`.
  *
  * @remarks
  * Only text that looks like JSON (`{`/`[`-prefixed after trimming) is even
  * attempted — most hooks print plain text and exit, and that is not an
  * error, since Claude Code itself only tries to parse stdout as JSON when it
- * looks like one. A JSON object with no `permissionDecision` key is
- * `"none"` too: a hook may validly emit JSON that carries no decision at
- * all (a log line, a status payload).
+ * looks like one.
  */
 function classifyJsonDecision(eventSpec: EventSpec, stdout: string): JsonDecision {
   const trimmed = stdout.trim();
@@ -62,16 +120,20 @@ function classifyJsonDecision(eventSpec: EventSpec, stdout: string): JsonDecisio
     return { kind: "malformed" };
   }
 
-  if (!isPlainRecord(parsed) || !("permissionDecision" in parsed)) {
+  if (!isPlainRecord(parsed)) {
     return { kind: "none" };
   }
 
-  const value = parsed["permissionDecision"];
-  if (typeof value !== "string" || !eventSpec.jsonDecisions.includes(value)) {
+  const raw = readDecisionValue(parsed);
+  if (raw === undefined) {
+    return { kind: "none" };
+  }
+
+  if (typeof raw !== "string" || !eventSpec.jsonDecisions.includes(raw)) {
     return { kind: "schema-violation" };
   }
 
-  return { kind: "decision", value };
+  return { kind: "decision", value: raw };
 }
 
 function findExitCodeEffect(
@@ -105,9 +167,9 @@ export function resolveDecision(
     // whose `EventName` union has drifted ahead of the spec file it loaded —
     // exactly what "unknown" exists to report rather than throw on.
     return unknownDecision({
-      kind: "version-out-of-spec-range",
-      detected: event,
-      specRange: spec.claudeCodeRange,
+      kind: "event-not-in-spec",
+      event,
+      specVersion: spec.specVersion,
     });
   }
 
@@ -124,26 +186,57 @@ export function resolveDecision(
     // still exit whatever code it wants regardless of what Claude Code
     // honors, so this is the check that keeps a spec/reality mismatch from
     // being promoted into a false deny for an event that cannot deny at all.
+    // The mismatch is the *spec entry* contradicting itself (`blockable:
+    // false` alongside a documented `block` effect), not the hook's own
+    // output, so it is reported as `unknown` rather than blamed on the hook
+    // as a `schema-violation`.
     return eventSpec.blockable
-      ? denied("exit-2", outcome.exitCode)
-      : errored(outcome.exitCode, "schema-violation");
+      ? denied("exit-code", outcome.exitCode)
+      : unknownDecision({
+          kind: "contradictory-exit-code-effect",
+          event,
+          exitCode: outcome.exitCode,
+        });
   }
 
   if (jsonDecision.kind === "decision") {
-    if (eventSpec.blockable && DENY_VALUES.has(jsonDecision.value)) {
+    // Gated on this event's own `jsonDecisions`, never on `blockable`:
+    // `classifyJsonDecision` already rejected any value outside
+    // `eventSpec.jsonDecisions` as a `schema-violation`, so by this point
+    // `jsonDecision.value` is one the event itself documents as a valid
+    // decision — including events such as `PermissionRequest` and
+    // `PostToolUse` that deny exclusively through this channel while being
+    // `blockable: false`.
+    if (denyValuesFor(eventSpec).has(jsonDecision.value)) {
       return denied("permission-decision", outcome.exitCode);
     }
-    if (ALLOW_VALUES.has(jsonDecision.value)) {
+    if (allowValuesFor(eventSpec).has(jsonDecision.value)) {
       return allowed(outcome.exitCode);
     }
-    // A recognized decision value that is neither deny/block nor allow (for
-    // example "ask" or "defer") hands the action back to Claude Code's own
-    // normal flow — hookassert has nothing more specific to assert.
+    // A documented decision value that is neither deny-shaped nor
+    // allow-shaped (for example `PreToolUse`'s "ask"/"defer") hands the
+    // action back to Claude Code's own normal flow — hookassert has nothing
+    // more specific to assert.
     return passed(outcome.exitCode);
   }
 
   if (jsonDecision.kind === "schema-violation") {
     return errored(outcome.exitCode, "schema-violation");
+  }
+
+  // Malformed JSON is reported here — above the "documented exit code"
+  // branch below — whenever the exit code is one Claude Code actually
+  // attaches meaning to (a successful `0`, or a `non-blocking-error`/
+  // `ignored` row this event documents): a hook whose JSON writer crashed
+  // mid-output should not be reported as a clean pass or a policy no-op just
+  // because its exit code was otherwise unremarkable. An undocumented
+  // nonzero exit code still falls through to `nonzero-exit-without-json`
+  // below, which already covers "no idea what this exit code means."
+  if (
+    jsonDecision.kind === "malformed" &&
+    (outcome.exitCode === 0 || effect !== undefined)
+  ) {
+    return errored(outcome.exitCode, "invalid-json");
   }
 
   if (effect !== undefined) {
@@ -155,9 +248,7 @@ export function resolveDecision(
   }
 
   if (outcome.exitCode === 0) {
-    return jsonDecision.kind === "malformed"
-      ? errored(outcome.exitCode, "invalid-json")
-      : passed(outcome.exitCode);
+    return passed(outcome.exitCode);
   }
 
   // A non-zero exit code the spec does not document for this event (neither
@@ -169,7 +260,7 @@ export function resolveDecision(
 /**
  * Whether `outcome` is the specific combination `resolveDecision` resolves
  * to `deny` despite stdout JSON saying `allow`: an `exit 2`-equivalent
- * block effect alongside an `allow` `permissionDecision`.
+ * block effect alongside an allow-shaped decision value.
  *
  * @remarks
  * `resolveDecision`'s return type is the closed `Decision` shape this
@@ -193,5 +284,8 @@ export function exit2OverridesAllowJson(
     return false;
   }
   const jsonDecision = classifyJsonDecision(eventSpec, outcome.stdout);
-  return jsonDecision.kind === "decision" && ALLOW_VALUES.has(jsonDecision.value);
+  return (
+    jsonDecision.kind === "decision" &&
+    allowValuesFor(eventSpec).has(jsonDecision.value)
+  );
 }

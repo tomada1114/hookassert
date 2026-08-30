@@ -123,7 +123,7 @@ describe("exit 2 vs. an allow JSON payload", () => {
     const decision = resolveDecision(spec, "PreToolUse", outcome);
     expect(decision.kind).toBe("deny");
     if (decision.kind === "deny") {
-      expect(decision.source).toBe("exit-2");
+      expect(decision.source).toBe("exit-code");
     }
     expect(exit2OverridesAllowJson(spec, "PreToolUse", outcome)).toBe(true);
   });
@@ -261,6 +261,35 @@ describe("exit 0 with malformed JSON-looking stdout resolves to error with cause
   });
 });
 
+describe("malformed JSON is not swallowed by a documented non-blocking exit code", () => {
+  it("PreToolUse exit 1 with malformed stdout resolves to error/invalid-json, not pass", () => {
+    // exit 1 is PreToolUse's documented `non-blocking-error` exit code: a
+    // hook whose JSON writer crashed mid-output while still exiting 1 must
+    // not be reported as a clean policy no-op.
+    const outcome = makeOutcome({ exitCode: 1, stdout: "{oops" });
+    const decision = resolveDecision(spec, "PreToolUse", outcome);
+    expect(decision.kind).toBe("error");
+    if (decision.kind === "error") {
+      expect(decision.cause).toBe("invalid-json");
+    }
+  });
+
+  it("an undocumented nonzero exit with malformed stdout still resolves to nonzero-exit-without-json", () => {
+    // Contrast with the case above: an exit code the spec says nothing
+    // about at all keeps its existing "no idea what this exit code means"
+    // cause rather than being reinterpreted as an invalid-JSON failure.
+    const decision = resolveDecision(
+      spec,
+      "PreToolUse",
+      makeOutcome({ exitCode: 127, stdout: "{oops" }),
+    );
+    expect(decision.kind).toBe("error");
+    if (decision.kind === "error") {
+      expect(decision.cause).toBe("nonzero-exit-without-json");
+    }
+  });
+});
+
 describe("PostToolUse never resolves to deny even given exitCode 2", () => {
   it("PostToolUse is not blockable, and the real spec agrees exit 2 is non-blocking for it", () => {
     const decision = resolveDecision(spec, "PostToolUse", makeOutcome({ exitCode: 2 }));
@@ -268,10 +297,14 @@ describe("PostToolUse never resolves to deny even given exitCode 2", () => {
     expect(decision.kind).toBe("pass");
   });
 
-  it("treats a block effect on a non-blockable event as a contract violation, not a deny", () => {
+  it("treats a block effect on a non-blockable event as a spec contradiction, not the hook's fault", () => {
     // The shipped spec never actually pairs a "block" effect with a
     // non-blockable event, so this exercises resolveDecision's defensive
-    // guard directly with a hand-built, self-contradictory event entry.
+    // guard directly with a hand-built, self-contradictory event entry. The
+    // spec entry is what is wrong here, not the hook's own JSON, so this
+    // resolves to `unknown` rather than `error/schema-violation` — that
+    // cause is reserved for a hook's own output failing to match what the
+    // event documents.
     const contradictorySpec = specWithOverriddenEvent(spec, "PostToolUse", {
       blockable: false,
       exitCodeEffects: [{ exitCode: 2, effect: "block", stderrTo: "user" }],
@@ -281,9 +314,13 @@ describe("PostToolUse never resolves to deny even given exitCode 2", () => {
       "PostToolUse",
       makeOutcome({ exitCode: 2 }),
     );
-    expect(decision.kind).toBe("error");
-    if (decision.kind === "error") {
-      expect(decision.cause).toBe("schema-violation");
+    expect(decision.kind).toBe("unknown");
+    if (decision.kind === "unknown") {
+      expect(decision.reasons[0]).toEqual({
+        kind: "contradictory-exit-code-effect",
+        event: "PostToolUse",
+        exitCode: 2,
+      });
     }
   });
 });
@@ -295,15 +332,6 @@ describe("JSON decisions outside deny/allow fall through to the normal flow", ()
       stdout: JSON.stringify({ permissionDecision: "ask" }),
     });
     const decision = resolveDecision(spec, "PreToolUse", outcome);
-    expect(decision.kind).toBe("pass");
-  });
-
-  it("a block permissionDecision on a non-blockable event resolves to pass, not deny", () => {
-    const outcome = makeOutcome({
-      exitCode: 0,
-      stdout: JSON.stringify({ permissionDecision: "block" }),
-    });
-    const decision = resolveDecision(spec, "PostToolUse", outcome);
     expect(decision.kind).toBe("pass");
   });
 
@@ -331,16 +359,122 @@ describe("JSON decisions outside deny/allow fall through to the normal flow", ()
   });
 });
 
+describe("the JSON decision channel is gated on jsonDecisions, not blockable", () => {
+  it("PermissionRequest denies via JSON despite being blockable: false", () => {
+    const outcome = makeOutcome({
+      stdout: JSON.stringify({ permissionDecision: "deny" }),
+    });
+    const decision = resolveDecision(spec, "PermissionRequest", outcome);
+    expect(decision.kind).toBe("deny");
+    if (decision.kind === "deny") {
+      expect(decision.source).toBe("permission-decision");
+    }
+  });
+
+  it("PermissionRequest allows via JSON despite being blockable: false", () => {
+    const outcome = makeOutcome({
+      stdout: JSON.stringify({ permissionDecision: "allow" }),
+    });
+    const decision = resolveDecision(spec, "PermissionRequest", outcome);
+    expect(decision.kind).toBe("allow");
+  });
+
+  it.each([["PostToolUse"], ["PostToolUseFailure"]] as const)(
+    '%s denies via a top-level `decision: "block"` payload despite being blockable: false',
+    (event) => {
+      const outcome = makeOutcome({
+        stdout: JSON.stringify({ decision: "block", reason: "policy violation" }),
+      });
+      const decision = resolveDecision(spec, event, outcome);
+      expect(decision.kind).toBe("deny");
+      if (decision.kind === "deny") {
+        expect(decision.source).toBe("permission-decision");
+      }
+    },
+  );
+});
+
+describe("the decision value is read from hookSpecificOutput.permissionDecision, top-level decision, or top-level permissionDecision, in that order", () => {
+  it("reads hookSpecificOutput.permissionDecision for PreToolUse", () => {
+    const outcome = makeOutcome({
+      stdout: JSON.stringify({
+        hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny" },
+      }),
+    });
+    const decision = resolveDecision(spec, "PreToolUse", outcome);
+    expect(decision.kind).toBe("deny");
+  });
+
+  it("reads a top-level decision when hookSpecificOutput carries no permissionDecision", () => {
+    const outcome = makeOutcome({
+      stdout: JSON.stringify({ decision: "block" }),
+    });
+    const decision = resolveDecision(spec, "Stop", outcome);
+    expect(decision.kind).toBe("deny");
+  });
+
+  it("falls back to a top-level permissionDecision when neither of the other two locations is present", () => {
+    const outcome = makeOutcome({
+      stdout: JSON.stringify({ permissionDecision: "allow" }),
+    });
+    const decision = resolveDecision(spec, "PreToolUse", outcome);
+    expect(decision.kind).toBe("allow");
+  });
+
+  it("prefers hookSpecificOutput.permissionDecision over a conflicting top-level decision", () => {
+    const outcome = makeOutcome({
+      exitCode: 0,
+      stdout: JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "allow",
+        },
+        decision: "block",
+      }),
+    });
+    const decision = resolveDecision(spec, "PreToolUse", outcome);
+    expect(decision.kind).toBe("allow");
+  });
+
+  it("falls through to top-level decision when hookSpecificOutput is present but carries no permissionDecision key", () => {
+    const outcome = makeOutcome({
+      stdout: JSON.stringify({
+        hookSpecificOutput: { hookEventName: "PreToolUse" },
+        decision: "deny",
+      }),
+    });
+    const decision = resolveDecision(spec, "PreToolUse", outcome);
+    expect(decision.kind).toBe("deny");
+  });
+});
+
+describe("deny-shaped and allow-shaped jsonDecisions values are derived per event", () => {
+  it.each([
+    ["accept", "allow"],
+    ["decline", "deny"],
+    ["cancel", "deny"],
+  ] as const)(
+    "Elicitation permissionDecision %s resolves to %s",
+    (value, expectedKind) => {
+      const outcome = makeOutcome({
+        stdout: JSON.stringify({ permissionDecision: value }),
+      });
+      const decision = resolveDecision(spec, "Elicitation", outcome);
+      expect(decision.kind).toBe(expectedKind);
+    },
+  );
+});
+
 describe("resolveDecision when the loaded spec and EventName have drifted apart", () => {
-  it("returns unknown/version-out-of-spec-range rather than throwing", () => {
+  it("returns unknown/event-not-in-spec rather than throwing", () => {
     const incompleteSpec = specWithoutEvent(spec, "PostToolUse");
     const decision = resolveDecision(incompleteSpec, "PostToolUse", makeOutcome());
     expect(decision.kind).toBe("unknown");
     if (decision.kind === "unknown") {
       expect(decision.reasons[0]).toEqual({
-        kind: "version-out-of-spec-range",
-        detected: "PostToolUse",
-        specRange: spec.claudeCodeRange,
+        kind: "event-not-in-spec",
+        event: "PostToolUse",
+        specVersion: spec.specVersion,
       });
     }
   });
@@ -372,11 +506,15 @@ describe("unknownDecision requires at least one UnknownReason", () => {
 
 describe("factory functions build exactly the Decision shape they name", () => {
   it("denied carries its source and exit code", () => {
-    const bySource: Record<"exit-2" | "permission-decision", Decision> = {
-      "exit-2": denied("exit-2", 2),
+    const bySource: Record<"exit-code" | "permission-decision", Decision> = {
+      "exit-code": denied("exit-code", 2),
       "permission-decision": denied("permission-decision", 0),
     };
-    expect(bySource["exit-2"]).toEqual({ kind: "deny", source: "exit-2", exitCode: 2 });
+    expect(bySource["exit-code"]).toEqual({
+      kind: "deny",
+      source: "exit-code",
+      exitCode: 2,
+    });
     expect(bySource["permission-decision"]).toEqual({
       kind: "deny",
       source: "permission-decision",
