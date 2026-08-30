@@ -378,6 +378,7 @@ export default defineConfig([
       "tests/matcher.test.ts",
       "tests/cli.test.ts",
       "tests/report.test.ts",
+      "tests/reporters.test.ts",
       "tests/fixture.test.ts",
       "tests/assert.test.ts",
     ],
