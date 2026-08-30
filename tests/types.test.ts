@@ -1,13 +1,18 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 
 import type {
+  CaseResult,
   Decision,
   EventName,
   ExecOutcome,
+  ExpectationDiff,
+  NonFiringExplanation,
   PayloadOrigin,
   Provenance,
+  RejectedMatch,
   ResolvedHook,
   SettingsLayer,
+  Summary,
   UnknownReason,
   VersionSourceName,
 } from "../src/index.js";
@@ -439,6 +444,244 @@ describe("PayloadOrigin", () => {
       // @ts-expect-error a synthetic origin carries no envelope fields
       const origin: PayloadOrigin = { kind: "synthetic", capturedAt: "now" };
       void origin;
+    };
+    expect(rejected).toBeTypeOf("function");
+  });
+});
+
+/** A complete `ResolvedHook`, reused by the `CaseResult` cases below. */
+const hook: ResolvedHook = {
+  event: "PreToolUse",
+  matcher: "Bash",
+  command: "./hook.sh",
+  args: undefined,
+  timeoutMs: undefined,
+  provenance,
+  dedupeKey: "PreToolUse::./hook.sh",
+};
+
+describe("CaseResult", () => {
+  it("narrows on kind to each variant's own fields", () => {
+    const narrow = (result: CaseResult): void => {
+      switch (result.kind) {
+        case "pass": {
+          expectTypeOf(result).toEqualTypeOf<{
+            readonly kind: "pass";
+            readonly origin: PayloadOrigin;
+          }>();
+          break;
+        }
+        case "fail": {
+          expectTypeOf(result).toEqualTypeOf<{
+            readonly kind: "fail";
+            readonly origin: PayloadOrigin;
+            readonly diffs: readonly ExpectationDiff[];
+            readonly nonFiring: NonFiringExplanation | undefined;
+          }>();
+          break;
+        }
+        case "unknown": {
+          expectTypeOf(result).toEqualTypeOf<{
+            readonly kind: "unknown";
+            readonly origin: PayloadOrigin;
+            readonly reasons: readonly [UnknownReason, ...UnknownReason[]];
+          }>();
+          break;
+        }
+        case "skipped": {
+          expectTypeOf(result).toEqualTypeOf<{
+            readonly kind: "skipped";
+            readonly origin: PayloadOrigin;
+            readonly reason: "dry-run" | "stub-only";
+          }>();
+          break;
+        }
+      }
+    };
+    narrow({ kind: "pass", origin: { kind: "synthetic" } });
+    narrow({
+      kind: "fail",
+      origin: { kind: "synthetic" },
+      diffs: [{ field: "exitCode", expectedExitCode: 2, actualExitCode: 0 }],
+      nonFiring: undefined,
+    });
+    narrow({
+      kind: "fail",
+      origin: { kind: "synthetic" },
+      diffs: [],
+      nonFiring: { kind: "no-hook-configured", event: "PreToolUse" },
+    });
+    narrow({
+      kind: "unknown",
+      origin: { kind: "synthetic" },
+      reasons: [{ kind: "plugin-hooks-present", files: [] }],
+    });
+    narrow({ kind: "skipped", origin: { kind: "synthetic" }, reason: "dry-run" });
+  });
+
+  it("an unknown result's reasons rejects an empty array at compile time, mirroring Decision.unknown", () => {
+    const rejected = (): void => {
+      const result: CaseResult = {
+        kind: "unknown",
+        origin: { kind: "synthetic" },
+        // @ts-expect-error reasons is a non-empty tuple, not a plain array — an empty array cannot construct it
+        reasons: [],
+      };
+      void result;
+    };
+    expect(rejected).toBeTypeOf("function");
+  });
+
+  it("accepts an unknown result with exactly one reason", () => {
+    const reason: UnknownReason = { kind: "plugin-hooks-present", files: [] };
+    const result: CaseResult = {
+      kind: "unknown",
+      origin: { kind: "synthetic" },
+      reasons: [reason],
+    };
+    expectTypeOf(result.reasons).toEqualTypeOf<
+      readonly [UnknownReason, ...UnknownReason[]]
+    >();
+  });
+
+  it("rejects a fail variant missing nonFiring", () => {
+    const rejected = (): void => {
+      // @ts-expect-error nonFiring must be present, even as undefined, per exactOptionalPropertyTypes
+      const result: CaseResult = {
+        kind: "fail",
+        origin: { kind: "synthetic" },
+        diffs: [],
+      };
+      void result;
+    };
+    expect(rejected).toBeTypeOf("function");
+  });
+});
+
+describe("ExpectationDiff", () => {
+  it("narrows on field to each member's own expected/actual pair", () => {
+    const narrow = (diff: ExpectationDiff): void => {
+      switch (diff.field) {
+        case "fires": {
+          expectTypeOf(diff).toEqualTypeOf<{
+            readonly field: "fires";
+            readonly expectedFires: boolean;
+            readonly actualFires: boolean;
+          }>();
+          break;
+        }
+        case "decision": {
+          expectTypeOf(diff).toEqualTypeOf<{
+            readonly field: "decision";
+            readonly expectedDecision: Decision["kind"];
+            readonly actualDecision: Decision["kind"];
+          }>();
+          break;
+        }
+        case "exitCode": {
+          expectTypeOf(diff).toEqualTypeOf<{
+            readonly field: "exitCode";
+            readonly expectedExitCode: number;
+            readonly actualExitCode: number;
+          }>();
+          break;
+        }
+        case "stdoutContains": {
+          expectTypeOf(diff).toEqualTypeOf<{
+            readonly field: "stdoutContains";
+            readonly expectedSubstring: string;
+            readonly actualStdout: string;
+          }>();
+          break;
+        }
+        case "stderrContains": {
+          expectTypeOf(diff).toEqualTypeOf<{
+            readonly field: "stderrContains";
+            readonly expectedSubstring: string;
+            readonly actualStderr: string;
+          }>();
+          break;
+        }
+        case "timedOut": {
+          expectTypeOf(diff).toEqualTypeOf<{
+            readonly field: "timedOut";
+            readonly expectedTimedOut: boolean;
+            readonly actualTimedOut: boolean;
+          }>();
+          break;
+        }
+      }
+    };
+    narrow({ field: "fires", expectedFires: true, actualFires: false });
+    narrow({ field: "decision", expectedDecision: "deny", actualDecision: "pass" });
+    narrow({ field: "exitCode", expectedExitCode: 2, actualExitCode: 0 });
+    narrow({
+      field: "stdoutContains",
+      expectedSubstring: "blocked",
+      actualStdout: "",
+    });
+    narrow({
+      field: "stderrContains",
+      expectedSubstring: "denied",
+      actualStderr: "",
+    });
+    narrow({ field: "timedOut", expectedTimedOut: true, actualTimedOut: false });
+  });
+});
+
+describe("NonFiringExplanation", () => {
+  it("narrows on kind to each member's own fields", () => {
+    const narrow = (explanation: NonFiringExplanation): void => {
+      switch (explanation.kind) {
+        case "matcher-did-not-match": {
+          expectTypeOf(explanation).toEqualTypeOf<{
+            readonly kind: "matcher-did-not-match";
+            readonly hooks: readonly RejectedMatch[];
+          }>();
+          break;
+        }
+        case "no-hook-configured": {
+          expectTypeOf(explanation).toEqualTypeOf<{
+            readonly kind: "no-hook-configured";
+            readonly event: EventName;
+          }>();
+          break;
+        }
+        case "excluded-settings-layer": {
+          expectTypeOf(explanation).toEqualTypeOf<{
+            readonly kind: "excluded-settings-layer";
+            readonly hooks: readonly ResolvedHook[];
+          }>();
+          break;
+        }
+      }
+    };
+    narrow({
+      kind: "matcher-did-not-match",
+      hooks: [{ hook, reason: "did not match" }],
+    });
+    narrow({ kind: "no-hook-configured", event: "PreToolUse" });
+    narrow({ kind: "excluded-settings-layer", hooks: [hook] });
+  });
+});
+
+describe("Summary", () => {
+  it("requires asserted, fromRecorded, failed, unknown, skipped with no optional fields", () => {
+    expectTypeOf<Summary>().toEqualTypeOf<{
+      readonly asserted: number;
+      readonly fromRecorded: number;
+      readonly failed: number;
+      readonly unknown: number;
+      readonly skipped: number;
+    }>();
+    expectTypeOf<Required<Summary>>().toEqualTypeOf<Summary>();
+  });
+
+  it("rejects a summary missing skipped", () => {
+    const rejected = (): void => {
+      // @ts-expect-error every field is required, including skipped
+      const summary: Summary = { asserted: 0, fromRecorded: 0, failed: 0, unknown: 0 };
+      void summary;
     };
     expect(rejected).toBeTypeOf("function");
   });
