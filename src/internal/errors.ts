@@ -1,3 +1,5 @@
+import type { SettingsLayer } from "../types.js";
+
 /**
  * The exit code every hookassert failure resolves to.
  *
@@ -55,5 +57,42 @@ export class UsageError extends HookassertError {
   constructor(message: string) {
     super(message);
     this.name = "UsageError";
+  }
+}
+
+/**
+ * Thrown when a settings source cannot be turned into hooks.
+ *
+ * @remarks
+ * Covers both ways a settings file can be unreadable as hook configuration: a
+ * JSONC syntax error the parser cannot recover from, and a `hooks` value that
+ * parses fine but is not shaped the way Claude Code's own settings schema
+ * requires (for example, an event whose value is not an array of matcher
+ * groups). Either way the file cannot contribute hooks, so both resolve to
+ * the same load error from `src/internal/errors.ts`'s exit-code table.
+ */
+export class SettingsParseError extends HookassertError {
+  /** Stable discriminator, unchanged across non-breaking releases. */
+  readonly code = "ERR_SETTINGS_PARSE" as const;
+
+  /** Settings parse failures always exit 5 (load error). */
+  readonly exitCode = 5;
+
+  /** Absolute path of the settings file that could not be parsed. */
+  readonly file: string;
+
+  /** Which merged layer {@link SettingsParseError.file} belongs to. */
+  readonly layer: SettingsLayer;
+
+  /**
+   * @param file - Absolute path of the offending settings file.
+   * @param layer - Which merged layer the file belongs to.
+   * @param reason - What about the file's shape or syntax was rejected.
+   */
+  constructor(file: string, layer: SettingsLayer, reason: string) {
+    super(`Failed to parse settings file ${file} (${layer} layer): ${reason}`);
+    this.name = "SettingsParseError";
+    this.file = file;
+    this.layer = layer;
   }
 }

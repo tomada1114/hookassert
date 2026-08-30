@@ -91,5 +91,8 @@
   },
   "bin": {
     "hookassert": "./dist/cli.js"
+  },
+  "dependencies": {
+    "jsonc-parser": "^3.3.1"
   }
 }
