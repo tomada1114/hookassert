@@ -370,7 +370,12 @@ export default defineConfig([
     // still reaches every static directory; nothing here narrows that
     // assertion, only what a handful of named files may additionally do.
     name: "tests/static-layer-unit-tests",
-    files: ["tests/settings.test.ts", "tests/spec.test.ts", "tests/decision.test.ts"],
+    files: [
+      "tests/settings.test.ts",
+      "tests/spec.test.ts",
+      "tests/decision.test.ts",
+      "tests/matcher.test.ts",
+    ],
     rules: {
       "no-restricted-imports": "off",
     },
