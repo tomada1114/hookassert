@@ -1,0 +1,121 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/tomada1114/hookassert/schema/report.schema.json",
+  "title": "hookassert JSON report",
+  "description": "Schema for the `json` reporter's output (src/internal/report/json.ts): the fixed, versioned contract downstream CI tooling may parse directly.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["reportVersion", "header", "event", "target", "firing", "rejected"],
+  "properties": {
+    "reportVersion": {
+      "const": "1",
+      "description": "Version of this report shape, independent of the package's own semver."
+    },
+    "header": { "$ref": "#/$defs/header" },
+    "event": { "type": "string", "minLength": 1 },
+    "target": { "type": ["string", "null"] },
+    "firing": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/firingHook" }
+    },
+    "rejected": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/rejectedOutcome" }
+    }
+  },
+  "$defs": {
+    "header": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["claudeVersion", "specRange", "notices"],
+      "properties": {
+        "claudeVersion": { "type": "string", "minLength": 1 },
+        "specRange": { "type": "string", "minLength": 1 },
+        "notices": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file", "layer", "line", "col", "offset"],
+      "properties": {
+        "file": { "type": "string", "minLength": 1 },
+        "layer": {
+          "type": "string",
+          "enum": ["user", "project", "local", "explicit"]
+        },
+        "line": { "type": "integer", "minimum": 1 },
+        "col": { "type": "integer", "minimum": 1 },
+        "offset": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "hook": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event",
+        "matcher",
+        "command",
+        "args",
+        "timeoutMs",
+        "dedupeKey",
+        "provenance"
+      ],
+      "properties": {
+        "event": { "type": "string", "minLength": 1 },
+        "matcher": { "type": ["string", "null"] },
+        "command": { "type": "string", "minLength": 1 },
+        "args": {
+          "type": ["array", "null"],
+          "items": { "type": "string" }
+        },
+        "timeoutMs": { "type": ["integer", "null"], "minimum": 0 },
+        "dedupeKey": { "type": "string", "minLength": 1 },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      }
+    },
+    "firingHook": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event",
+        "matcher",
+        "command",
+        "args",
+        "timeoutMs",
+        "dedupeKey",
+        "provenance",
+        "matcherIgnored"
+      ],
+      "properties": {
+        "event": { "type": "string", "minLength": 1 },
+        "matcher": { "type": ["string", "null"] },
+        "command": { "type": "string", "minLength": 1 },
+        "args": {
+          "type": ["array", "null"],
+          "items": { "type": "string" }
+        },
+        "timeoutMs": { "type": ["integer", "null"], "minimum": 0 },
+        "dedupeKey": { "type": "string", "minLength": 1 },
+        "provenance": { "$ref": "#/$defs/provenance" },
+        "matcherIgnored": { "type": "boolean" }
+      }
+    },
+    "rejectedOutcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hook", "kind", "reason"],
+      "properties": {
+        "hook": { "$ref": "#/$defs/hook" },
+        "kind": {
+          "type": "string",
+          "enum": ["exact-list", "unanchored-regex", "unknown"]
+        },
+        "reason": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

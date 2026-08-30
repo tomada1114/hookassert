@@ -10,3 +10,14 @@
 export { renderPretty } from "./pretty.js";
 export { buildReportHeader, formatClaudeVersion } from "./summary.js";
 export type { ExplainReport, ReportHeader } from "./summary.js";
+export { renderJson, toJsonReport } from "./json.js";
+export type { JsonExplainReport } from "./json.js";
+export {
+  relativizeForGithub,
+  renderGithub,
+  renderGithubFinding,
+  renderGithubHeader,
+} from "./github.js";
+export type { ReportFinding } from "./github.js";
+export { isReportFormat, renderInFormat } from "./format.js";
+export type { FormatRenderers, ReportFormat } from "./format.js";
