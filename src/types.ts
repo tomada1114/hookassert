@@ -144,3 +144,161 @@ export interface ResolvedHook {
    */
   readonly dedupeKey: string;
 }
+
+/**
+ * A hook's raw exit code, stdout, stderr, and whether it timed out.
+ *
+ * @remarks
+ * The input the static decision resolver (`src/internal/decision/`) and the
+ * future executor's `Spawner` seam both speak: whatever actually spawns a
+ * hook produces one of these, and the decision resolver consumes it without
+ * ever spawning anything itself.
+ *
+ * @public
+ */
+export interface ExecOutcome {
+  /** The process's exit status. */
+  readonly exitCode: number;
+
+  /** Everything the hook wrote to stdout. */
+  readonly stdout: string;
+
+  /** Everything the hook wrote to stderr. */
+  readonly stderr: string;
+
+  /** Whether the hook was killed for exceeding its deadline. */
+  readonly timedOut: boolean;
+}
+
+/**
+ * Which mechanism a version probe tried, and failed, to read Claude Code's
+ * own version from.
+ *
+ * @remarks
+ * Named here only because {@link UnknownReason}'s `"version-undetermined"`
+ * member needs a closed vocabulary for `triedSources` — nothing in
+ * `src/internal/decision/` actually produces that reason today. Probing
+ * Claude Code's version at runtime is a later executor issue's job; this is
+ * the vocabulary that probe reports against, extended there if it needs a
+ * source this issue did not anticipate.
+ *
+ * @public
+ */
+export type VersionSourceName =
+  "cli-flag" | "environment-variable" | "package-manifest";
+
+/**
+ * A reason the decision resolver could not assert a {@link Decision} with
+ * confidence.
+ *
+ * @public
+ */
+export type UnknownReason =
+  | {
+      /** The detected Claude Code version falls outside the loaded spec's `claudeCodeRange`, so its documented behavior cannot be trusted for this run. */
+      readonly kind: "version-out-of-spec-range";
+      /** The Claude Code version that was actually detected. */
+      readonly detected: string;
+      /** The loaded spec's own `claudeCodeRange`, which `detected` falls outside of. */
+      readonly specRange: string;
+    }
+  | {
+      /** No probe could determine which Claude Code version is running at all. */
+      readonly kind: "version-undetermined";
+      /** Every {@link VersionSourceName} a probe tried before giving up. */
+      readonly triedSources: readonly VersionSourceName[];
+    }
+  | {
+      /**
+       * The event's JSON payload shape has never been confirmed against a
+       * live Claude Code instance (`spec.events[event].payloadShape.verified
+       * === false`), so a payload-shaped assertion about it cannot be
+       * trusted.
+       */
+      readonly kind: "payload-shape-unverified";
+      /** The event whose payload shape is unverified. */
+      readonly event: EventName;
+      /** The loaded spec's own `specVersion`. */
+      readonly specVersion: string;
+    }
+  | {
+      /** One or more plugin-declared hook files exist that hookassert has not read, so the effective hook set is incomplete. */
+      readonly kind: "plugin-hooks-present";
+      /** Absolute paths of the unread plugin hook files. */
+      readonly files: readonly string[];
+    }
+  | {
+      /** A managed settings file was treated as present without being able to confirm it, because reading it is outside hookassert's reach. */
+      readonly kind: "managed-settings-assumed";
+      /** Absolute path of the assumed managed settings file. */
+      readonly path: string;
+    };
+
+/**
+ * The closed vocabulary a hook's raw exit code and stdout resolve to.
+ *
+ * @remarks
+ * Constructed only through `src/internal/decision/factory.ts`'s functions —
+ * see that module's own doc comment — never by writing one of these object
+ * shapes out at a call site.
+ *
+ * @public
+ */
+export type Decision =
+  | {
+      /**
+       * The action is blocked, either because the hook exited with the
+       * event's documented block-effect exit code (`source: "exit-2"`) or
+       * because its stdout JSON carried a recognized deny/block
+       * `permissionDecision` on a blockable event (`source:
+       * "permission-decision"`).
+       */
+      readonly kind: "deny";
+      /** Which channel produced the deny. */
+      readonly source: "exit-2" | "permission-decision";
+      /** The hook's raw exit code. */
+      readonly exitCode: number;
+    }
+  | {
+      /** Stdout JSON explicitly granted the action. */
+      readonly kind: "allow";
+      /** The hook's raw exit code. */
+      readonly exitCode: number;
+    }
+  | {
+      /**
+       * No decision is present; the normal permission flow proceeds
+       * unchanged. This is the required outcome for a hook that exits a
+       * non-blocking code while intending to act as a policy check: exiting
+       * `1` to "block" is a no-op, not a deny, and `"pass"` is what carries
+       * that fact forward truthfully rather than mislabeling it a failed
+       * block.
+       */
+      readonly kind: "pass";
+      /** The hook's raw exit code. */
+      readonly exitCode: number;
+    }
+  | {
+      /** The outcome could not be turned into a decision at all. */
+      readonly kind: "error";
+      /** The hook's raw exit code. */
+      readonly exitCode: number;
+      /**
+       * `"nonzero-exit-without-json"` — a non-zero, non-documented exit with
+       * no recognizable JSON on stdout.
+       * `"invalid-json"` — stdout looked like JSON and failed to parse.
+       * `"schema-violation"` — stdout parsed but its decision value is not
+       * one the event documents.
+       */
+      readonly cause: "nonzero-exit-without-json" | "invalid-json" | "schema-violation";
+    }
+  | {
+      /**
+       * Nothing above can be asserted; `reasons` is a non-empty tuple, so an
+       * `unknown` without at least one {@link UnknownReason} cannot be
+       * constructed, at the type level, by any call site.
+       */
+      readonly kind: "unknown";
+      /** Every reason nothing more specific could be asserted. */
+      readonly reasons: readonly [UnknownReason, ...UnknownReason[]];
+    };
