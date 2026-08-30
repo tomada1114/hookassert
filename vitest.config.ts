@@ -18,6 +18,7 @@ const automationTests = [
   "tests/ci-sync.test.ts",
   "tests/clean.test.ts",
   "tests/docs.test.ts",
+  "tests/executor.test.ts",
   "tests/git-env.test.ts",
   "tests/is-main.test.ts",
   "tests/labels.test.ts",

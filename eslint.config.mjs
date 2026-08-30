@@ -374,6 +374,7 @@ export default defineConfig([
       "tests/settings.test.ts",
       "tests/spec.test.ts",
       "tests/decision.test.ts",
+      "tests/executor.test.ts",
       "tests/matcher.test.ts",
       "tests/cli.test.ts",
       "tests/report.test.ts",

@@ -1,0 +1,439 @@
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import process from "node:process";
+import { fileURLToPath } from "node:url";
+
+import { afterEach, describe, expect, it } from "vitest";
+
+import {
+  buildHookEnv,
+  executeHooks,
+  HOOKASSERT_DEFAULT_TIMEOUT_MS,
+  isCredentialShapedEnvKey,
+  NodeSpawner,
+  resolveDefaultTimeoutMs,
+} from "../src/internal/exec/index.js";
+import type {
+  ExecDeps,
+  ExecutionPlan,
+  ExecutionStep,
+} from "../src/internal/exec/index.js";
+import type { Spawner, SpawnRequest } from "../src/internal/exec/index.js";
+import type { FixtureStubEntry } from "../src/internal/fixture/index.js";
+import { resolveDecision } from "../src/internal/decision/index.js";
+import { loadSpecFile } from "../src/internal/spec/index.js";
+import type { EventName, ExecOutcome, Provenance, ResolvedHook } from "../src/types.js";
+
+// Reaching src/internal/exec/, src/internal/fixture/, src/internal/decision/
+// and src/internal/spec/ directly (rather than through src/index.ts's
+// exports, per the writing-tests skill) is a deliberate, narrowly scoped
+// exception: the executor has no public surface in this issue and won't have
+// one until a later test-cmd issue's composition root wires it in — see
+// eslint.config.mjs's "tests/static-layer-unit-tests" block for the full
+// reasoning.
+
+const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
+const REAL_SPEC_PATH = path.join(REPO_ROOT, "spec", "claude-code-2.1.251-2.2.0.json");
+const REAL_SPEC = loadSpecFile(REAL_SPEC_PATH);
+const HOOKS_DIR = fileURLToPath(new URL("./fixtures/hooks/", import.meta.url));
+
+/** Records every call rather than performing one, so a test can assert on `calls`. */
+class CountingSpawner implements Spawner {
+  readonly calls: SpawnRequest[] = [];
+  readonly #outcome: ExecOutcome;
+
+  constructor(
+    outcome: ExecOutcome = { exitCode: 0, stdout: "", stderr: "", timedOut: false },
+  ) {
+    this.#outcome = outcome;
+  }
+
+  spawn(req: SpawnRequest): Promise<ExecOutcome> {
+    this.calls.push(req);
+    return Promise.resolve(this.#outcome);
+  }
+}
+
+let nextOffset = 0;
+
+function makeHook(overrides: Partial<ResolvedHook> = {}): ResolvedHook {
+  const provenance: Provenance = {
+    file: "/fake/settings.json",
+    layer: "project",
+    line: 1,
+    col: 1,
+    offset: nextOffset++,
+  };
+  const event = overrides.event ?? "PreToolUse";
+  const command = overrides.command ?? "./hook.sh";
+  return {
+    event,
+    matcher: overrides.matcher,
+    command,
+    args: overrides.args,
+    timeoutMs: overrides.timeoutMs,
+    provenance: overrides.provenance ?? provenance,
+    dedupeKey: overrides.dedupeKey ?? JSON.stringify([event, command, nextOffset]),
+  };
+}
+
+function makeStep(
+  hook: ResolvedHook,
+  overrides: Partial<Omit<ExecutionStep, "hook">> = {},
+): ExecutionStep {
+  return {
+    event: overrides.event ?? hook.event,
+    hook,
+    stdin: overrides.stdin ?? "",
+    cwd: overrides.cwd,
+    stub: overrides.stub,
+  };
+}
+
+function makePlan(
+  steps: readonly ExecutionStep[],
+  assertedEvents?: ReadonlySet<EventName>,
+): ExecutionPlan {
+  return {
+    steps,
+    assertedEvents: assertedEvents ?? new Set(steps.map((step) => step.event)),
+  };
+}
+
+function makeDeps(overrides: Partial<ExecDeps> = {}): ExecDeps {
+  return {
+    spawner: overrides.spawner ?? new CountingSpawner(),
+    // A real, existing directory: NodeSpawner's tests actually spawn a
+    // process against this cwd, and child_process.spawn reports a
+    // nonexistent cwd as a misleading "spawn <command> ENOENT" on the
+    // command itself rather than on the cwd.
+    projectRoot: overrides.projectRoot ?? REPO_ROOT,
+    processEnv: overrides.processEnv ?? {},
+    providedEnvKeys: overrides.providedEnvKeys ?? [],
+    allowedEnvKeys: overrides.allowedEnvKeys ?? [],
+    hookassertDefaultTimeoutMs:
+      overrides.hookassertDefaultTimeoutMs ?? HOOKASSERT_DEFAULT_TIMEOUT_MS,
+    specDefaultTimeoutMs:
+      overrides.specDefaultTimeoutMs ?? REAL_SPEC.defaults.hookTimeoutMs,
+  };
+}
+
+/** Single-quotes `value` for embedding literally in a `sh -c` command string. */
+function shQuote(value: string): string {
+  return `'${value.replaceAll("'", String.raw`'\''`)}'`;
+}
+
+describe("faithful spawn forms", () => {
+  it("a hook with no args launches via shell form (sh -c)", async () => {
+    const spawner = new CountingSpawner();
+    const hook = makeHook({ command: "echo hi", args: undefined });
+    const deps = makeDeps({ spawner });
+    await executeHooks(deps, makePlan([makeStep(hook)]));
+
+    expect(spawner.calls).toHaveLength(1);
+    expect(spawner.calls[0]?.form).toBe("shell");
+    expect(spawner.calls[0]?.command).toBe("echo hi");
+    expect(spawner.calls[0]?.args).toEqual([]);
+  });
+
+  it("a hook with args launches via exec form without a shell", async () => {
+    const spawner = new CountingSpawner();
+    const hook = makeHook({ command: "/usr/bin/env", args: ["node", "-e", "1"] });
+    const deps = makeDeps({ spawner });
+    await executeHooks(deps, makePlan([makeStep(hook)]));
+
+    expect(spawner.calls).toHaveLength(1);
+    expect(spawner.calls[0]?.form).toBe("exec");
+    expect(spawner.calls[0]?.command).toBe("/usr/bin/env");
+    expect(spawner.calls[0]?.args).toEqual(["node", "-e", "1"]);
+  });
+
+  it("an empty args array (declared, not omitted) still launches via exec form", async () => {
+    const spawner = new CountingSpawner();
+    const hook = makeHook({ command: "/usr/bin/env", args: [] });
+    const deps = makeDeps({ spawner });
+    await executeHooks(deps, makePlan([makeStep(hook)]));
+
+    expect(spawner.calls[0]?.form).toBe("exec");
+  });
+
+  it("shell form interpolates a $VAR the real way; exec form passes it through literally", async () => {
+    const scriptPath = path.join(HOOKS_DIR, "print-argv.mjs");
+    const deps = makeDeps({
+      spawner: new NodeSpawner(),
+      allowedEnvKeys: ["HOOKASSERT_TEST_VAR"],
+      processEnv: { HOOKASSERT_TEST_VAR: "expanded-value" },
+    });
+
+    const shellHook = makeHook({
+      command: `${shQuote(process.execPath)} ${shQuote(scriptPath)} $HOOKASSERT_TEST_VAR`,
+      args: undefined,
+    });
+    const [shellOutcome] = await executeHooks(deps, makePlan([makeStep(shellHook)]));
+    expect(shellOutcome).toBeDefined();
+    expect(JSON.parse(shellOutcome?.stdout ?? "[]")).toEqual(["expanded-value"]);
+
+    const execHook = makeHook({
+      command: process.execPath,
+      args: [scriptPath, "$HOOKASSERT_TEST_VAR"],
+    });
+    const [execOutcome] = await executeHooks(deps, makePlan([makeStep(execHook)]));
+    expect(execOutcome).toBeDefined();
+    expect(JSON.parse(execOutcome?.stdout ?? "[]")).toEqual(["$HOOKASSERT_TEST_VAR"]);
+  });
+});
+
+describe("environment allowlist", () => {
+  it("isCredentialShapedEnvKey", () => {
+    for (const name of [
+      "AWS_SECRET_ACCESS_KEY",
+      "AWS_ACCESS_KEY_ID",
+      "GITHUB_TOKEN",
+      "DB_PASSWORD",
+      "STRIPE_SECRET",
+      "API_KEY",
+      "GOOGLE_CREDENTIALS",
+      "SERVICE_CREDENTIAL",
+    ]) {
+      expect(isCredentialShapedEnvKey(name)).toBe(true);
+    }
+    for (const name of ["PATH", "NODE_ENV", "CLAUDE_PROJECT_DIR", "HOME", "LANG"]) {
+      expect(isCredentialShapedEnvKey(name)).toBe(false);
+    }
+  });
+
+  it("env passed to the spawned process is built from the allowlist, not process.env", async () => {
+    const spawner = new CountingSpawner();
+    const hook = makeHook({ command: "echo hi", args: undefined });
+    const deps = makeDeps({
+      spawner,
+      processEnv: { FOO: "bar", UNRELATED_NOISE: "should-never-appear" },
+      allowedEnvKeys: ["FOO"],
+    });
+    await executeHooks(deps, makePlan([makeStep(hook)]));
+
+    expect(spawner.calls[0]?.env).toEqual({ FOO: "bar" });
+    expect(spawner.calls[0]?.env).not.toBe(deps.processEnv);
+  });
+
+  it("spec.hookEnv.provided variables are included by default, with CLAUDE_PROJECT_DIR synthesized", async () => {
+    const spawner = new CountingSpawner();
+    const hook = makeHook({ command: "echo hi", args: undefined });
+    const deps = makeDeps({
+      spawner,
+      projectRoot: "/resolved/project/root",
+      providedEnvKeys: REAL_SPEC.hookEnv.provided,
+    });
+    await executeHooks(deps, makePlan([makeStep(hook)]));
+
+    expect(spawner.calls[0]?.env).toEqual({
+      CLAUDE_PROJECT_DIR: "/resolved/project/root",
+    });
+  });
+
+  it("a credential-shaped variable name is excluded from env unless explicitly requested", () => {
+    const processEnv = { AWS_SECRET_ACCESS_KEY: "leaked-if-present" };
+
+    const withoutRequest = buildHookEnv(processEnv, "/root", [], []);
+    expect(withoutRequest).not.toHaveProperty("AWS_SECRET_ACCESS_KEY");
+
+    const withRequest = buildHookEnv(
+      processEnv,
+      "/root",
+      [],
+      ["AWS_SECRET_ACCESS_KEY"],
+    );
+    expect(withRequest).toEqual({ AWS_SECRET_ACCESS_KEY: "leaked-if-present" });
+  });
+
+  it("a credential-shaped name in providedKeys is dropped even though allowedKeys would let it through", () => {
+    const processEnv = { AWS_SECRET_ACCESS_KEY: "leaked-if-present" };
+    const env = buildHookEnv(processEnv, "/root", ["AWS_SECRET_ACCESS_KEY"], []);
+    expect(env).not.toHaveProperty("AWS_SECRET_ACCESS_KEY");
+  });
+});
+
+describe("cwd", () => {
+  const tempDirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  function makeTempDir(prefix: string): string {
+    const dir = mkdtempSync(path.join(tmpdir(), prefix));
+    tempDirs.push(dir);
+    return realpathSync(dir);
+  }
+
+  it("cwd defaults to the resolved project root and is overridable per case", async () => {
+    const projectRoot = makeTempDir("hookassert-executor-project-");
+    const overrideDir = makeTempDir("hookassert-executor-override-");
+    const scriptPath = path.join(HOOKS_DIR, "print-cwd.mjs");
+
+    const deps = makeDeps({
+      spawner: new NodeSpawner(),
+      projectRoot,
+    });
+    const hook = makeHook({ command: process.execPath, args: [scriptPath] });
+
+    const [defaultOutcome] = await executeHooks(deps, makePlan([makeStep(hook)]));
+    expect(defaultOutcome?.stdout).toBe(projectRoot);
+
+    const [overriddenOutcome] = await executeHooks(
+      deps,
+      makePlan([makeStep(hook, { cwd: overrideDir })]),
+    );
+    expect(overriddenOutcome?.stdout).toBe(overrideDir);
+  });
+});
+
+describe("timeout", () => {
+  it("the effective default timeout is min(hookassert's default, spec.defaults.hookTimeoutMs)", () => {
+    expect(resolveDefaultTimeoutMs(10_000, 600_000)).toBe(10_000);
+    expect(resolveDefaultTimeoutMs(600_000, 100)).toBe(100);
+    expect(resolveDefaultTimeoutMs(5, 5)).toBe(5);
+  });
+
+  it("real spec: hookassert's own default wins because it is the shorter one", () => {
+    expect(
+      resolveDefaultTimeoutMs(
+        HOOKASSERT_DEFAULT_TIMEOUT_MS,
+        REAL_SPEC.defaults.hookTimeoutMs,
+      ),
+    ).toBe(HOOKASSERT_DEFAULT_TIMEOUT_MS);
+  });
+
+  it("a step whose hook declares no timeoutMs uses the effective default", async () => {
+    const spawner = new CountingSpawner();
+    const hook = makeHook({
+      command: "echo hi",
+      args: undefined,
+      timeoutMs: undefined,
+    });
+    const deps = makeDeps({
+      spawner,
+      hookassertDefaultTimeoutMs: 10_000,
+      specDefaultTimeoutMs: 600_000,
+    });
+    await executeHooks(deps, makePlan([makeStep(hook)]));
+    expect(spawner.calls[0]?.timeoutMs).toBe(10_000);
+  });
+
+  it("a hook's own declared timeoutMs overrides the effective default", async () => {
+    const spawner = new CountingSpawner();
+    const hook = makeHook({ command: "echo hi", args: undefined, timeoutMs: 42 });
+    const deps = makeDeps({ spawner });
+    await executeHooks(deps, makePlan([makeStep(hook)]));
+    expect(spawner.calls[0]?.timeoutMs).toBe(42);
+  });
+
+  it("a hook that outlives its timeout produces ExecOutcome.timedOut === true", async () => {
+    const scriptPath = path.join(HOOKS_DIR, "sleep-past-timeout.mjs");
+    // Self-terminates at 3000ms regardless, so a bug in the kill logic cannot
+    // leave an orphaned process running past this test's own lifetime.
+    const hook = makeHook({
+      command: process.execPath,
+      args: [scriptPath, "3000"],
+      timeoutMs: 150,
+    });
+    const deps = makeDeps({ spawner: new NodeSpawner() });
+    const [outcome] = await executeHooks(deps, makePlan([makeStep(hook)]));
+
+    expect(outcome?.timedOut).toBe(true);
+  });
+});
+
+describe("stub bypass", () => {
+  it("a stubbed command never reaches the Spawner — its ExecOutcome comes from the declared stub value", async () => {
+    const spawner = new CountingSpawner();
+    const realHook = makeHook({ command: "real-command" });
+    const stubbedHook = makeHook({ command: "stubbed-command" });
+    const stub: FixtureStubEntry = { exitCode: 7 };
+    const deps = makeDeps({ spawner });
+
+    const outcomes = await executeHooks(
+      deps,
+      makePlan([makeStep(realHook), makeStep(stubbedHook, { stub })]),
+    );
+
+    expect(outcomes).toHaveLength(2);
+    expect(outcomes[1]).toEqual({
+      exitCode: 7,
+      stdout: "",
+      stderr: "",
+      timedOut: false,
+    });
+    // The regression this test guards: the stubbed command's own name must
+    // never show up among what was actually spawned.
+    expect(spawner.calls).toHaveLength(1);
+    expect(spawner.calls.every((call) => call.command !== "stubbed-command")).toBe(
+      true,
+    );
+  });
+});
+
+describe("event scoping", () => {
+  it("a hook belonging to an event no case asserts is never spawned", async () => {
+    const spawner = new CountingSpawner();
+    const assertedHook = makeHook({ event: "PreToolUse", command: "asserted-command" });
+    const unassertedHook = makeHook({
+      event: "PostToolUse",
+      command: "unasserted-command",
+    });
+    const deps = makeDeps({ spawner });
+
+    const outcomes = await executeHooks(
+      deps,
+      makePlan(
+        [makeStep(assertedHook), makeStep(unassertedHook)],
+        new Set<EventName>(["PreToolUse"]),
+      ),
+    );
+
+    expect(outcomes).toHaveLength(1);
+    expect(spawner.calls).toHaveLength(1);
+    expect(spawner.calls[0]?.command).toBe("asserted-command");
+  });
+});
+
+describe("end to end: ExecOutcome feeds resolveDecision to the expected Decision.kind", () => {
+  it.each([
+    ["exit0-silent.mjs", [] as readonly string[], "pass"],
+    ["exit2-stderr.mjs", [] as readonly string[], "deny"],
+    ["emit-allow-json.mjs", [] as readonly string[], "allow"],
+  ] as const)(
+    "%s resolves to Decision.kind %s",
+    async (scriptName, extraArgs, expectedKind) => {
+      const scriptPath = path.join(HOOKS_DIR, scriptName);
+      const hook = makeHook({
+        event: "PreToolUse",
+        command: process.execPath,
+        args: [scriptPath, ...extraArgs],
+      });
+      const deps = makeDeps({ spawner: new NodeSpawner() });
+      const [outcome] = await executeHooks(deps, makePlan([makeStep(hook)]));
+      if (outcome === undefined) {
+        throw new Error("executeHooks returned no outcome for a single-step plan");
+      }
+
+      const decision = resolveDecision(REAL_SPEC, "PreToolUse", outcome);
+      expect(decision.kind).toBe(expectedKind);
+    },
+  );
+});
+
+describe("Spawner never rejects", () => {
+  it("NodeSpawner resolves with an ExecOutcome even for a command that cannot be found", async () => {
+    const hook = makeHook({ command: "/no/such/hookassert-fixture-binary", args: [] });
+    const deps = makeDeps({ spawner: new NodeSpawner() });
+    const [outcome] = await executeHooks(deps, makePlan([makeStep(hook)]));
+
+    expect(outcome).toBeDefined();
+    expect(outcome?.timedOut).toBe(false);
+    expect(outcome?.exitCode).not.toBe(0);
+  });
+});
