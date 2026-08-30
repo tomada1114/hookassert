@@ -446,8 +446,8 @@ describe("--format selects the correct reporter uniformly for explain", () => {
     };
   }
 
-  it("--format pretty prints free-text output", () => {
-    const result = runCli(
+  it("--format pretty prints free-text output", async () => {
+    const result = await runCli(
       ["explain", "PreToolUse", "Bash", "--format", "pretty"],
       "hookassert",
       explainDeps(),
@@ -460,8 +460,8 @@ describe("--format selects the correct reporter uniformly for explain", () => {
     }).toThrow();
   });
 
-  it("--format json prints a schema-valid JSON document", () => {
-    const result = runCli(
+  it("--format json prints a schema-valid JSON document", async () => {
+    const result = await runCli(
       ["explain", "PreToolUse", "Bash", "--format", "json"],
       "hookassert",
       explainDeps(),
@@ -474,8 +474,8 @@ describe("--format selects the correct reporter uniformly for explain", () => {
     expect(validate(parsed)).toBe(true);
   });
 
-  it("--format github prints a GitHub Actions workflow-command line", () => {
-    const result = runCli(
+  it("--format github prints a GitHub Actions workflow-command line", async () => {
+    const result = await runCli(
       ["explain", "PreToolUse", "Bash", "--format", "github"],
       "hookassert",
       explainDeps(),
@@ -485,10 +485,63 @@ describe("--format selects the correct reporter uniformly for explain", () => {
     expect(result.stdout).toContain("::notice title=hookassert::");
   });
 
-  // FOLLOW-UPS: `lint` and `test` do not exist yet (#13, #11). Once either
-  // lands and wires --format through renderInFormat, that issue must extend
-  // this same uniform-selection assertion to its own subcommand — this issue
-  // cannot test a subcommand that does not exist.
+  // FOLLOW-UPS: `lint` does not exist yet (#13). Once it lands and wires
+  // --format through renderInFormat, that issue must extend this same
+  // uniform-selection assertion to its own subcommand.
+});
+
+describe("--format selects the correct reporter uniformly for test", () => {
+  const NO_OP_FIXTURE = path.join(FIXTURES_DIR, "test-no-op.yaml");
+
+  function testDeps() {
+    return {
+      cwd: PROJECT_WITH_HOOKS_DIR,
+      home: path.join(FIXTURES_DIR, "no-such-directory"),
+      env: {},
+    };
+  }
+
+  // The fixture case here declares an event with no configured hook at all
+  // (`SessionEnd`, absent from `PROJECT_WITH_HOOKS_DIR`'s settings) and no
+  // `expect`, so the run spawns nothing and needs no consent — keeping this
+  // suite in the fast unit project rather than `automationTests`.
+
+  it("--format pretty prints free-text output", async () => {
+    const result = await runCli(
+      ["test", NO_OP_FIXTURE, "--ci", "--format", "pretty"],
+      "hookassert",
+      testDeps(),
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Claude Code version:");
+    expect(() => {
+      JSON.parse(result.stdout);
+    }).toThrow();
+  });
+
+  it("--format json prints a JSON document", async () => {
+    const result = await runCli(
+      ["test", NO_OP_FIXTURE, "--ci", "--format", "json"],
+      "hookassert",
+      testDeps(),
+    );
+
+    expect(result.exitCode).toBe(0);
+    const parsed = JSON.parse(result.stdout) as { reportVersion: string };
+    expect(parsed.reportVersion).toBe("1");
+  });
+
+  it("--format github prints a GitHub Actions workflow-command line", async () => {
+    const result = await runCli(
+      ["test", NO_OP_FIXTURE, "--ci", "--format", "github"],
+      "hookassert",
+      testDeps(),
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("::notice title=hookassert::");
+  });
 });
 
 // --- header parity across formats ---------------------------------------------

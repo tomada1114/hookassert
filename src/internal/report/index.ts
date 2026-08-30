@@ -21,3 +21,10 @@ export {
 export type { ReportFinding } from "./github.js";
 export { isReportFormat, renderInFormat } from "./format.js";
 export type { FormatRenderers, ReportFormat } from "./format.js";
+export {
+  renderTestGithub,
+  renderTestJson,
+  renderTestPretty,
+  toJsonTestReport,
+} from "./testReport.js";
+export type { JsonTestReport, TestCaseReport, TestReport } from "./testReport.js";

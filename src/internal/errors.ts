@@ -258,6 +258,35 @@ export class FixtureNotFoundError extends HookassertError {
 }
 
 /**
+ * Thrown when `test` did not obtain consent to spawn the hooks its fixtures
+ * would run.
+ *
+ * @remarks
+ * Raised in exactly two situations, per this issue's consent-gate design: a
+ * TTY invocation where the user declined the confirmation prompt, or a
+ * non-TTY invocation (`!process.stdout.isTTY`) that passed neither `--yes`
+ * nor `--ci`. This is deliberately a load-time-adjacent failure (exit `6`),
+ * not a plain assertion failure (`1`): nothing was actually run, so it would
+ * be misleading to report it the same way as a fixture case that ran and
+ * disagreed with its own `expect`.
+ */
+export class ConsentRequiredError extends HookassertError {
+  /** Stable discriminator, unchanged across non-breaking releases. */
+  readonly code = "ERR_CONSENT_REQUIRED" as const;
+
+  /** Consent failures always exit 6. */
+  readonly exitCode = 6;
+
+  /**
+   * @param message - Human-readable explanation of why consent was not obtained.
+   */
+  constructor(message: string) {
+    super(message);
+    this.name = "ConsentRequiredError";
+  }
+}
+
+/**
  * Thrown when a fixture case expects a decision the event it targets can
  * never produce.
  *

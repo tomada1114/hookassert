@@ -4,15 +4,42 @@ import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
 import {
+  assertCase,
+  summarize,
+  type CaseObservation,
+} from "./internal/assert/index.js";
+import { resolveDecision } from "./internal/decision/index.js";
+import {
+  ConsentRequiredError,
   HookassertError,
   SettingsNotFoundError,
   UsageError,
 } from "./internal/errors.js";
-import { matchHooks, type VersionContext } from "./internal/matcher/index.js";
+import {
+  executeHooks,
+  HOOKASSERT_DEFAULT_TIMEOUT_MS,
+  NodeVersionProbe,
+  type ExecDeps,
+  type ExecutionPlan,
+  type ExecutionStep,
+} from "./internal/exec/index.js";
+import { createUnimplementedSpawner, type Spawner } from "./internal/exec/spawner.js";
+import type { VersionProbe } from "./internal/exec/version.js";
+import {
+  loadFixtures,
+  type FixtureCase,
+  type FixtureFile,
+} from "./internal/fixture/index.js";
+import {
+  matchHooks,
+  type MatcherOutcome,
+  type VersionContext,
+} from "./internal/matcher/index.js";
 import {
   buildReportHeader,
   isReportFormat,
@@ -20,16 +47,20 @@ import {
   renderInFormat,
   renderJson,
   renderPretty,
+  renderTestGithub,
+  renderTestJson,
+  renderTestPretty,
   type ExplainReport,
+  type TestCaseReport,
+  type TestReport,
 } from "./internal/report/index.js";
 import {
   discoverSources,
   hooksForEvent,
   loadSettings,
 } from "./internal/settings/index.js";
-import { loadSpecFile, parseClaudeVersion } from "./internal/spec/index.js";
-import { createUnimplementedSpawner, type Spawner } from "./internal/exec/spawner.js";
-import type { EventName } from "./types.js";
+import { loadSpecFile, parseClaudeVersion, type Spec } from "./internal/spec/index.js";
+import type { CaseResult, EventName, ExecOutcome, ResolvedHook } from "./types.js";
 
 export interface CliResult {
   exitCode: number;
@@ -62,11 +93,10 @@ const SPEC_PATH = fileURLToPath(
  * usage text.
  *
  * @remarks
- * `explain` is the first of the four with real behavior, wired in by this
- * issue. `lint`, `record`, and `test` are still stubs: naming all four here
- * anyway is what makes the usage text and the "unknown command" message
- * agree with each other, and with the routing that replaces each stub once
- * its own issue lands.
+ * `explain` and `test` have real behavior; `lint` and `record` are still
+ * stubs. Naming all four here anyway is what makes the usage text and the
+ * "unknown command" message agree with each other, and with the routing that
+ * replaces each stub once its own issue lands.
  */
 const COMMANDS = [
   ["explain", "Show which hooks a tool event fires, and why."],
@@ -170,7 +200,7 @@ function failureResult(error: HookassertError, executable: string): CliResult {
   };
 }
 
-/** The dependencies `explain` and `lint` are threaded through, for injection in tests. */
+/** The dependencies `explain`, `lint`, and `test` are threaded through, for injection in tests. */
 export interface CliDeps {
   /** Directory `project` and `local` settings, and a relative `--settings <file>`, resolve against. */
   readonly cwd: string;
@@ -178,16 +208,70 @@ export interface CliDeps {
   /** Directory `user` settings resolve against. */
   readonly home: string;
 
-  /** Environment variables, read only for {@link CLAUDE_VERSION_ENV_VAR}. */
+  /**
+   * Environment variables. `explain` and `lint` read only
+   * {@link CLAUDE_VERSION_ENV_VAR} from it; `test` additionally uses it as
+   * the base a spawned hook's own environment is built from (see
+   * `buildHookEnv` in `src/internal/exec/executor.ts`) — never forwarded
+   * wholesale, only the variables that end up allowlisted.
+   */
   readonly env: Readonly<Record<string, string | undefined>>;
 
   /**
    * The command-execution seam. `explain` and `lint` accept it but never
    * call it — see `src/internal/exec/spawner.ts`'s own remark — so a
    * `CountingSpawner` injected here is how `tests/cli.test.ts` proves the
-   * zero-spawn guarantee mechanically rather than by inspection.
+   * zero-spawn guarantee mechanically rather than by inspection. `test` is
+   * the first command that actually calls it, both to run a fixture's hooks
+   * and, through `NodeVersionProbe`, to run `claude --version`.
    */
   readonly spawner: Spawner;
+
+  /**
+   * Absolute path of the shipped hooks spec to load.
+   *
+   * @remarks
+   * Defaults to the one spec file this package ships. Overridable so a test
+   * can exercise a code path the real spec cannot reach on its own — for
+   * example, `resolveDecision`'s `"event-not-in-spec"` `unknown` outcome,
+   * which the real spec's complete `events` map never produces.
+   */
+  readonly specPath: string;
+
+  /**
+   * Whether `test`'s consent gate treats this run as interactive.
+   *
+   * @remarks
+   * Defaults to `process.stdout.isTTY === true` — never `process.env.CI`,
+   * which answers a different question ("is a CI runner driving this
+   * process") than "can a human see and answer a prompt right now."
+   * Overridable so a test can exercise both branches of the consent gate
+   * without an actual terminal attached.
+   */
+  readonly isTTY: boolean;
+
+  /**
+   * Prints `prompt` and asks the user to confirm, for `test`'s interactive
+   * consent gate.
+   *
+   * @remarks
+   * Only ever called when {@link CliDeps.isTTY} is `true` and neither
+   * `--yes` nor `--ci` was given. Defaults to a real `node:readline/promises`
+   * prompt reading from `process.stdin`; overridable so a test can approve or
+   * decline deterministically without a real terminal.
+   */
+  readonly confirm: (prompt: string) => Promise<boolean>;
+}
+
+/** {@link CliDeps.confirm}'s real implementation: an interactive y/N prompt on the real terminal. */
+async function realConfirm(prompt: string): Promise<boolean> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = await rl.question(`${prompt}\nProceed? [y/N] `);
+    return /^y(es)?$/i.test(answer.trim());
+  } finally {
+    rl.close();
+  }
 }
 
 function resolveDeps(overrides: Partial<CliDeps>): CliDeps {
@@ -196,19 +280,24 @@ function resolveDeps(overrides: Partial<CliDeps>): CliDeps {
     home: overrides.home ?? homedir(),
     env: overrides.env ?? process.env,
     spawner: overrides.spawner ?? createUnimplementedSpawner(),
+    specPath: overrides.specPath ?? SPEC_PATH,
+    isTTY: overrides.isTTY ?? process.stdout.isTTY,
+    confirm: overrides.confirm ?? realConfirm,
   };
 }
 
 /**
  * Resolve the Claude Code version `explain` and `lint` run against, from the
- * two-step order this issue implements.
+ * first two steps of the full resolution order.
  *
  * @remarks
  * `--claude-version` beats {@link CLAUDE_VERSION_ENV_VAR}, which beats
- * `"undetermined"`. Deliberately no third step: a `VersionProbe` spawning
- * `claude --version`, and a fallback to the last `record` session's
- * recorded version, are both `#11`'s work, and adding either here would spawn
- * a process from a command whose whole point is guaranteeing it never does.
+ * `"undetermined"`. Deliberately no third step here: a `VersionProbe`
+ * spawning `claude --version` would violate `explain`/`lint`'s own zero-spawn
+ * guarantee. `resolveVersionContextForTest`, below, is `test`'s own wrapper
+ * that adds the probe (and, once `record`'s own session bookkeeping ships, a
+ * last-recorded-session fallback) as the two further steps only `test` is
+ * allowed to take.
  *
  * An environment variable that is set but empty counts as absent, not as a
  * malformed version: `HOOKASSERT_CLAUDE_VERSION=` in a CI job, or an
@@ -313,7 +402,7 @@ function runExplain(args: readonly string[], deps: CliDeps): CliResult {
     parsed.values["claude-version"],
     deps.env,
   );
-  const spec = loadSpecFile(SPEC_PATH);
+  const spec = loadSpecFile(deps.specPath);
 
   const explicitSettings = parsed.values.settings;
   // The loader maps a missing settings file to zero hooks, which is right for
@@ -353,8 +442,495 @@ function runExplain(args: readonly string[], deps: CliDeps): CliResult {
   return { exitCode: 0, stdout, stderr: "" };
 }
 
+/** `test`'s own option table: `common` plus consent, timing, and execution controls. */
+const TEST_OPTIONS = {
+  settings: { type: "string", multiple: true },
+  "claude-version": { type: "string" },
+  format: { type: "string" },
+  yes: { type: "boolean" },
+  ci: { type: "boolean" },
+  "dry-run": { type: "boolean" },
+  timeout: { type: "string" },
+  env: { type: "string", multiple: true },
+  help: { type: "boolean", short: "h" },
+} as const;
+
+/**
+ * Resolve the Claude Code version a `test` run should assume, from this
+ * issue's full four-step order.
+ *
+ * @remarks
+ * `--claude-version` and {@link CLAUDE_VERSION_ENV_VAR} are resolved exactly
+ * as {@link resolveVersionContext} already does for `explain`/`lint`
+ * (including its `UsageError` on an invalid value); `probe.detect()` is
+ * tried only when both of those came back empty, and "last recorded
+ * session's version" — the step between the probe and `"undetermined"` — is
+ * a documented no-op until `record`'s own session bookkeeping (`#15`) ships:
+ * there is nothing to read yet, so this always falls through past it.
+ *
+ * @throws {UsageError} `claudeVersionFlag` (or the environment variable, when
+ * the flag is absent) is not a `major.minor.patch` string.
+ */
+async function resolveVersionContextForTest(
+  claudeVersionFlag: string | undefined,
+  env: Readonly<Record<string, string | undefined>>,
+  probe: VersionProbe,
+): Promise<VersionContext> {
+  const direct = resolveVersionContext(claudeVersionFlag, env);
+  if (direct.kind === "known") {
+    return direct;
+  }
+  const probed = await probe.detect();
+  if (probed !== undefined) {
+    return { kind: "known", version: probed };
+  }
+  return { kind: "undetermined" };
+}
+
+/**
+ * Parse `--timeout`'s value into a positive millisecond count.
+ *
+ * @throws {UsageError} `value` is defined but not a positive finite number.
+ */
+function parseTimeoutOption(value: string | undefined): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new UsageError(
+      `--timeout must be a positive number of milliseconds, got ${JSON.stringify(value)}.`,
+    );
+  }
+  return parsed;
+}
+
+/**
+ * The candidate hooks a fixture case's matcher request considers, and every
+ * hook this issue's `settings:` filter excluded before the matcher ever saw
+ * them.
+ *
+ * @remarks
+ * `fileSettings.length === 0` (the fixture declares no `settings:` list, the
+ * common case) means "no restriction": every hook `hooksForEvent` returns is
+ * a candidate, and nothing is excluded. A non-empty list restricts candidates
+ * to hooks declared in one of the named files — resolved against `cwd`, the
+ * same base `--settings` itself resolves against — and reports every other
+ * hook under this event as {@link CaseObservation.excludedHooks}.
+ */
+function includedHooksForCase(
+  discovered: readonly ResolvedHook[],
+  fileSettings: readonly string[],
+  cwd: string,
+): {
+  readonly candidates: readonly ResolvedHook[];
+  readonly excludedHooks: readonly ResolvedHook[];
+} {
+  if (fileSettings.length === 0) {
+    return { candidates: discovered, excludedHooks: [] };
+  }
+  const included = new Set(fileSettings.map((entry) => path.resolve(cwd, entry)));
+  const candidates = discovered.filter((hook) => included.has(hook.provenance.file));
+  const excludedHooks = discovered.filter(
+    (hook) => !included.has(hook.provenance.file),
+  );
+  return { candidates, excludedHooks };
+}
+
+/** Whether `expect` declares no assertion at all — mirrors `assertCase.ts`'s own private predicate. */
+function isEmptyExpectation(caseData: FixtureCase): boolean {
+  const { expect } = caseData;
+  return (
+    expect.fires === undefined &&
+    expect.decision === undefined &&
+    expect.exitCode === undefined &&
+    expect.stdoutContains === undefined &&
+    expect.stderrContains === undefined &&
+    expect.context === undefined &&
+    expect.updatedInput === undefined &&
+    expect.timedOut === undefined
+  );
+}
+
+/**
+ * Whether `caseData` should never enter the spawn plan at all: an explicit
+ * `dryRun`, `--dry-run` applied to the whole run, or a case that declares
+ * only stubs and nothing to assert (`assertCase`'s own `"stub-only"` case).
+ */
+function isPreSkipped(caseData: FixtureCase, dryRunFlag: boolean): boolean {
+  if (caseData.dryRun === true || dryRunFlag) {
+    return true;
+  }
+  return (
+    caseData.stub !== undefined &&
+    Object.keys(caseData.stub).length > 0 &&
+    isEmptyExpectation(caseData)
+  );
+}
+
+/** Resolve one case's working-directory override to an absolute path, or `undefined` to use the run's own project root. */
+function resolveStepCwd(
+  caseData: FixtureCase,
+  file: FixtureFile,
+  cwd: string,
+): string | undefined {
+  const raw = caseData.cwd ?? file.defaults?.cwd;
+  return raw === undefined ? undefined : path.resolve(cwd, raw);
+}
+
+/**
+ * Build the `ExecDeps` one fixture file's steps run against.
+ *
+ * @remarks
+ * `file.defaults.env`'s declared values are merged into the effective
+ * process environment and their own keys added to the allowlist: unlike
+ * `--env <NAME>`, which opts an *ambient* variable in by name, a fixture's
+ * own `defaults.env` supplies its values directly, so declaring one there is
+ * itself "explicitly requesting it" for `buildHookEnv`'s credential-shape
+ * exception. `file.defaults.timeoutMs`, when the file declares one, takes
+ * precedence over `--timeout` for that file's own hooks — a fixture's own
+ * explicit default is more specific than a run-wide override — which in turn
+ * takes precedence over `HOOKASSERT_DEFAULT_TIMEOUT_MS`.
+ */
+function buildExecDepsForFile(
+  deps: CliDeps,
+  file: FixtureFile,
+  spec: Spec,
+  cliTimeoutOverrideMs: number | undefined,
+  cliEnvNames: readonly string[],
+): ExecDeps {
+  const fileEnv = file.defaults?.env ?? {};
+  return {
+    spawner: deps.spawner,
+    projectRoot: deps.cwd,
+    processEnv: { ...deps.env, ...fileEnv },
+    providedEnvKeys: spec.hookEnv.provided,
+    allowedEnvKeys: [...cliEnvNames, ...Object.keys(fileEnv)],
+    hookassertDefaultTimeoutMs:
+      file.defaults?.timeoutMs ?? cliTimeoutOverrideMs ?? HOOKASSERT_DEFAULT_TIMEOUT_MS,
+    specDefaultTimeoutMs: spec.defaults.hookTimeoutMs,
+  };
+}
+
+/** One command a step would actually spawn, described for a human at the consent prompt. */
+function describeStepForConsent(step: ExecutionStep): string {
+  const form = step.hook.args === undefined ? "shell" : "exec";
+  const args = step.hook.args === undefined ? "" : ` ${step.hook.args.join(" ")}`;
+  return `  [${form}] ${step.hook.command}${args}`;
+}
+
+/**
+ * Obtain consent to spawn `spawnWorthy` before `test` runs a single one of
+ * them.
+ *
+ * @remarks
+ * A step whose own `stub` bypasses the spawner never reaches `spawnWorthy` in
+ * the first place — see `runTest`'s own filter — so an empty `spawnWorthy`
+ * means nothing will actually run, and nothing needs consenting to: this
+ * function returns immediately, without checking `yes`, `ci`, or `isTTY` at
+ * all. `--yes` and `--ci` both bypass the prompt outright, in that order of
+ * appearance below (either is sufficient). Otherwise, a non-TTY invocation
+ * fails immediately — there is no one to ask — and a TTY invocation prints
+ * the full command list and awaits {@link CliDeps.confirm}'s answer.
+ *
+ * @throws {ConsentRequiredError} consent was not obtained, either because the
+ * invocation was non-interactive without `--yes`/`--ci`, or because the
+ * interactive prompt was declined.
+ */
+async function gateConsent(
+  deps: Pick<CliDeps, "confirm" | "isTTY">,
+  yes: boolean,
+  ci: boolean,
+  spawnWorthy: readonly ExecutionStep[],
+): Promise<void> {
+  if (spawnWorthy.length === 0 || yes || ci) {
+    return;
+  }
+
+  if (!deps.isTTY) {
+    throw new ConsentRequiredError(
+      `test needs consent to spawn ${String(spawnWorthy.length)} command(s) but is ` +
+        "running non-interactively without --yes or --ci. Pass --yes to consent, " +
+        "--ci for a non-interactive CI run, or run in a terminal to confirm interactively.",
+    );
+  }
+
+  const commandList = spawnWorthy.map(describeStepForConsent).join("\n");
+  const prompt = `About to run ${String(spawnWorthy.length)} command(s):\n${commandList}`;
+  const approved = await deps.confirm(prompt);
+  if (!approved) {
+    throw new ConsentRequiredError(
+      "test needs consent to spawn the hooks its fixtures would run, and consent " +
+        "was declined at the interactive prompt.",
+    );
+  }
+}
+
+/** Exit-code precedence for `test`, computed once from `Summary`'s counts. */
+function resolveTestExitCode(
+  summary: { readonly failed: number; readonly unknown: number },
+  ci: boolean,
+): number {
+  if (summary.failed > 0) {
+    return 1;
+  }
+  if (ci && summary.unknown > 0) {
+    return 3;
+  }
+  return 0;
+}
+
+/** One fixture case, prepared for execution: its matcher result and (once assigned) its authoritative step. */
+interface PreparedCase {
+  readonly fixturePath: string;
+  readonly index: number;
+  readonly caseData: FixtureCase;
+  /**
+   * The step whose outcome this case's `Decision` is built from — the first
+   * hook the matcher resolved as firing, in `ResolvedHook` order — or
+   * `undefined` when the case was pre-skipped or nothing fired for it.
+   *
+   * @remarks
+   * When more than one hook fires for the same case, every one of them is
+   * still spawned (a real Claude Code session would run them all), but only
+   * this first one is read back for the case's own pass/fail/unknown
+   * verdict — `CaseObservation` carries a single `decision`, not one per
+   * firing hook.
+   */
+  readonly firstStep: ExecutionStep | undefined;
+  readonly rejectedByMatcher: readonly MatcherOutcome[];
+  readonly excludedHooks: readonly ResolvedHook[];
+}
+
+/** One fixture file's execution plan, kept alongside the `ExecDeps` it runs against. */
+interface FilePlan {
+  readonly fixturePath: string;
+  readonly execDeps: ExecDeps;
+  readonly steps: ExecutionStep[];
+  readonly assertedEvents: Set<EventName>;
+}
+
+/**
+ * `test`'s own option table's positionals require at least one `<fixture>`
+ * path; parses and validates every other option, then wires the full
+ * pipeline this issue's design section names end to end.
+ *
+ * @throws {UsageError} an option was malformed, no `<fixture>` was given, or
+ * `--format`/`--timeout` was given an invalid value.
+ * @throws {ConsentRequiredError} consent to spawn was not obtained.
+ * (Also propagates every load-time error `loadSpecFile`/`loadFixtures` can
+ * throw — see those modules' own documentation.)
+ */
+async function runTest(args: readonly string[], deps: CliDeps): Promise<CliResult> {
+  let parsed;
+  try {
+    parsed = parseArgs({
+      args,
+      strict: true,
+      allowPositionals: true,
+      options: TEST_OPTIONS,
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new UsageError(`invalid options for test: ${reason}`);
+  }
+
+  if (parsed.positionals.length === 0) {
+    throw new UsageError("test requires at least one <fixture> argument.");
+  }
+
+  // Validated before any I/O, per the same rule runExplain follows.
+  if (parsed.values.format !== undefined && !isReportFormat(parsed.values.format)) {
+    throw new UsageError(
+      `unrecognized --format ${JSON.stringify(parsed.values.format)}. ` +
+        `Expected one of: pretty, json, github.`,
+    );
+  }
+  const timeoutOverrideMs = parseTimeoutOption(parsed.values.timeout);
+
+  const explicitSettings = parsed.values.settings;
+  for (const file of explicitSettings ?? []) {
+    const resolved = path.resolve(deps.cwd, file);
+    if (!existsSync(resolved)) {
+      throw new SettingsNotFoundError(resolved);
+    }
+  }
+
+  const spec = loadSpecFile(deps.specPath);
+
+  const fixturePaths = parsed.positionals.map((fixture) =>
+    path.resolve(deps.cwd, fixture),
+  );
+  const fixtureSet = loadFixtures(fixturePaths, spec);
+
+  const probe = new NodeVersionProbe(deps.spawner);
+  const versionContext = await resolveVersionContextForTest(
+    parsed.values["claude-version"],
+    deps.env,
+    probe,
+  );
+
+  const discoveredSources = discoverSources({
+    cwd: deps.cwd,
+    home: deps.home,
+    ...(explicitSettings === undefined ? {} : { explicit: explicitSettings }),
+  });
+  const discoveredSettings = loadSettings(discoveredSources);
+  const cliEnvNames = parsed.values.env ?? [];
+  const dryRunFlag = parsed.values["dry-run"] === true;
+
+  const prepared: PreparedCase[] = [];
+  const filePlans: FilePlan[] = [];
+
+  for (const { path: fixturePath, file } of fixtureSet.files) {
+    const execDeps = buildExecDepsForFile(
+      deps,
+      file,
+      spec,
+      timeoutOverrideMs,
+      cliEnvNames,
+    );
+    const filePlan: FilePlan = {
+      fixturePath,
+      execDeps,
+      steps: [],
+      assertedEvents: new Set<EventName>(),
+    };
+    filePlans.push(filePlan);
+
+    file.cases.forEach((rawCaseData, index) => {
+      filePlan.assertedEvents.add(rawCaseData.event);
+
+      const { candidates, excludedHooks } = includedHooksForCase(
+        hooksForEvent(discoveredSettings, rawCaseData.event),
+        file.settings,
+        deps.cwd,
+      );
+      const match = matchHooks(spec, versionContext, {
+        event: rawCaseData.event,
+        hooks: candidates,
+        target: rawCaseData.tool,
+      });
+
+      // `--dry-run` applies to the whole run, but `assertCase` only ever
+      // reads a case's own `dryRun` field — folding the flag into a copy
+      // here is what makes its "skipped"/"dry-run" verdict (not merely the
+      // absence of spawned steps below) hold for every case when the flag
+      // is set, without assertCase needing to know about a CLI flag at all.
+      const caseData: FixtureCase =
+        dryRunFlag && rawCaseData.dryRun !== true
+          ? { ...rawCaseData, dryRun: true }
+          : rawCaseData;
+
+      let firstStep: ExecutionStep | undefined;
+      if (!isPreSkipped(caseData, dryRunFlag)) {
+        match.firing.forEach((hook, hookIndex) => {
+          const step: ExecutionStep = {
+            event: caseData.event,
+            hook,
+            stdin: JSON.stringify(caseData.input ?? null),
+            cwd: resolveStepCwd(caseData, file, deps.cwd),
+            stub: caseData.stub?.[hook.command],
+          };
+          filePlan.steps.push(step);
+          if (hookIndex === 0) {
+            firstStep = step;
+          }
+        });
+      }
+
+      prepared.push({
+        fixturePath,
+        index,
+        caseData,
+        firstStep,
+        rejectedByMatcher: match.rejected,
+        excludedHooks,
+      });
+    });
+  }
+
+  const spawnWorthy = filePlans.flatMap((plan) =>
+    plan.steps.filter((step) => step.stub === undefined),
+  );
+  await gateConsent(
+    deps,
+    parsed.values.yes === true,
+    parsed.values.ci === true,
+    spawnWorthy,
+  );
+
+  const executed = await Promise.all(
+    filePlans.map((plan) => {
+      const executionPlan: ExecutionPlan = {
+        steps: plan.steps,
+        assertedEvents: plan.assertedEvents,
+      };
+      return executeHooks(plan.execDeps, executionPlan);
+    }),
+  );
+
+  const outcomesByStep = new Map<ExecutionStep, ExecOutcome>();
+  for (const results of executed) {
+    for (const { step, outcome } of results) {
+      outcomesByStep.set(step, outcome);
+    }
+  }
+
+  const caseReports: TestCaseReport[] = [];
+  const caseResults: CaseResult[] = [];
+  for (const p of prepared) {
+    const outcome =
+      p.firstStep === undefined ? undefined : outcomesByStep.get(p.firstStep);
+    const decision =
+      outcome === undefined
+        ? undefined
+        : resolveDecision(spec, p.caseData.event, outcome);
+    const observation: CaseObservation = {
+      decision,
+      execOutcome: outcome,
+      rejectedByMatcher: p.rejectedByMatcher,
+      excludedHooks: p.excludedHooks,
+    };
+    const result = assertCase(p.caseData, observation);
+    caseResults.push(result);
+    caseReports.push({
+      file: p.fixturePath,
+      index: p.index,
+      event: p.caseData.event,
+      tool: p.caseData.tool,
+      result,
+    });
+  }
+
+  const summary = summarize(caseResults);
+  const report: TestReport = {
+    header: buildReportHeader(versionContext, spec.claudeCodeRange),
+    cases: caseReports,
+    summary,
+  };
+
+  const stdout = renderInFormat(report, parsed.values.format, {
+    pretty: renderTestPretty,
+    json: renderTestJson,
+    github: (r: TestReport) => renderTestGithub(r, deps.cwd),
+  });
+
+  return {
+    exitCode: resolveTestExitCode(summary, parsed.values.ci === true),
+    stdout,
+    stderr: "",
+  };
+}
+
 /**
  * Run the package command without coupling its behavior to process globals.
+ *
+ * @remarks
+ * Async because `test` — unlike `explain` — genuinely spawns processes
+ * (fixture hooks, and `NodeVersionProbe`'s own `claude --version`) and awaits
+ * their results; `explain`'s own branch stays a plain synchronous call,
+ * simply returned from this `async` function like any other value.
  *
  * @param argv Arguments after the executable name.
  * @param executable Name or path shown in the usage line.
@@ -364,11 +940,11 @@ function runExplain(args: readonly string[], deps: CliDeps): CliResult {
  * `src/internal/exec/spawner.ts`.
  * @returns The process result a caller should observe.
  */
-export function runCli(
+export async function runCli(
   argv: readonly string[],
   executable = "hookassert",
   deps: Partial<CliDeps> = {},
-): CliResult {
+): Promise<CliResult> {
   const [subcommand] = argv;
   if (subcommand === undefined || argv.includes("--help") || argv.includes("-h")) {
     return { exitCode: 0, stdout: usage(executable), stderr: "" };
@@ -390,9 +966,10 @@ export function runCli(
     switch (subcommand) {
       case "explain":
         return runExplain(rest, resolveDeps(deps));
+      case "test":
+        return await runTest(rest, resolveDeps(deps));
       case "lint":
       case "record":
-      case "test":
         // A recognised command with no implementation behind it is still a
         // usage error: fabricating partial behavior would make the gap
         // invisible to the issue that is supposed to close it.
@@ -449,13 +1026,13 @@ export function isMain(moduleUrl: string): boolean {
  * @param argv Arguments after the executable name.
  * @returns The exit code the caller should set on the process.
  */
-export function main(argv: readonly string[]): number {
-  const result = runCli(argv);
+export async function main(argv: readonly string[]): Promise<number> {
+  const result = await runCli(argv);
   process.stdout.write(result.stdout);
   process.stderr.write(result.stderr);
   return result.exitCode;
 }
 
 if (isMain(import.meta.url)) {
-  process.exitCode = main(process.argv.slice(2));
+  process.exitCode = await main(process.argv.slice(2));
 }

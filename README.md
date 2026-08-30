@@ -31,11 +31,20 @@ hookassert --help
   `HOOKASSERT_CLAUDE_VERSION` environment variable, falling back to `"undetermined"`.
 - `hookassert lint` checks hook declarations for matcher and command mistakes.
 - `hookassert record` captures real hook payloads from a Claude Code session.
-- `hookassert test` replays recorded events and asserts on what the hooks did.
+- `hookassert test <fixture>...` replays one or more fixture files against your merged
+  settings, runs the hooks that actually fire, and asserts what happened against each
+  case's declared `expect`. It is the one command that spawns processes, so it asks for
+  consent first: on a terminal it prints the exact commands about to run and waits for
+  confirmation; `--yes` and `--ci` both skip the prompt, and a non-interactive run given
+  neither exits `6` with `ERR_CONSENT_REQUIRED` instead of running anything. `--dry-run`
+  excludes every case from the spawn plan; `--claude-version`, `--settings`,
+  `--timeout`, `--env`, and `--format` (`pretty`/`json`/`github`) all work the same way
+  they do for `explain`. Exits `0` when every case passes (and, with `--ci`, none is
+  `unknown` either), `1` when at least one fails, and `3` when there are no failures but
+  `--ci` was given and at least one case is `unknown`.
 
-`lint`, `record`, and `test` have no behavior yet: each currently exits `4` with
-`ERR_USAGE`, so a script that wires one up fails loudly instead of silently reporting
-success.
+`lint` and `record` have no behavior yet: each currently exits `4` with `ERR_USAGE`, so
+a script that wires one up fails loudly instead of silently reporting success.
 
 ## API
 

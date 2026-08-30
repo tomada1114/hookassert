@@ -47,14 +47,24 @@ function explainDeps(overrides: Partial<CliDeps> = {}): CliDeps {
     home: overrides.home ?? NO_SUCH_DIR,
     env: overrides.env ?? {},
     spawner: overrides.spawner ?? new CountingSpawner(),
+    specPath: overrides.specPath ?? explainDefaultSpecPath(),
+    isTTY: overrides.isTTY ?? false,
+    confirm: overrides.confirm ?? (() => Promise.resolve(false)),
   };
+}
+
+/** The shipped spec path, resolved the same way `src/cli.ts` resolves its own default. */
+function explainDefaultSpecPath(): string {
+  return fileURLToPath(
+    new URL("../spec/claude-code-2.1.251-2.2.0.json", import.meta.url),
+  );
 }
 
 /** The commands hookassert will ship, in the order the usage text lists them. */
 const SUBCOMMANDS = ["explain", "lint", "record", "test"] as const;
 
-/** The commands with no behavior yet — `explain` is this issue's own subject. */
-const STUB_SUBCOMMANDS = ["lint", "record", "test"] as const;
+/** The commands with no behavior yet — `explain` and `test` are both real now. */
+const STUB_SUBCOMMANDS = ["lint", "record"] as const;
 
 /** The `ERR_` shape AGENTS.md fixes for every published error code. */
 const ERROR_CODE = /^ERR_[A-Z0-9_]+$/;
@@ -65,37 +75,40 @@ function firstLine(stderr: string): string {
 }
 
 describe("runCli help", () => {
-  it("--help still exits 0 and prints the usage line", () => {
-    const result = runCli(["--help"], "my-tool");
+  it("--help still exits 0 and prints the usage line", async () => {
+    const result = await runCli(["--help"], "my-tool");
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("Usage: my-tool <command> [options]");
   });
 
-  it.each(SUBCOMMANDS)("--help lists the %s command in the usage text", (name) => {
-    expect(runCli(["--help"]).stdout).toContain(`  ${name}`);
-  });
+  it.each(SUBCOMMANDS)(
+    "--help lists the %s command in the usage text",
+    async (name) => {
+      expect((await runCli(["--help"])).stdout).toContain(`  ${name}`);
+    },
+  );
 
-  it("returns help on the short help flag", () => {
-    const result = runCli(["-h"]);
+  it("returns help on the short help flag", async () => {
+    const result = await runCli(["-h"]);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("Usage: hookassert <command> [options]");
     expect(result.stderr).toBe("");
   });
 
-  it("prefers help over dispatch when a command is also given", () => {
+  it("prefers help over dispatch when a command is also given", async () => {
     // `hookassert explain --help` asks about `explain`; until explain exists,
     // the general usage text is the honest answer, and it must not be an error.
-    const result = runCli(["explain", "--help"]);
+    const result = await runCli(["explain", "--help"]);
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe("");
   });
 
-  it("exits 0 with the usage text when given no arguments", () => {
+  it("exits 0 with the usage text when given no arguments", async () => {
     // Deliberate: a bare invocation stays exit 0, as it was before subcommand
     // dispatch existed. Only the empty stdout changes — printing the commands
     // is what a reader of a bare `hookassert` actually needs.
-    const result = runCli([], "my-tool");
+    const result = await runCli([], "my-tool");
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("Usage: my-tool <command> [options]");
@@ -103,8 +116,8 @@ describe("runCli help", () => {
 });
 
 describe("runCli dispatch", () => {
-  it("exits 4 with ERR_USAGE when the subcommand is unrecognized", () => {
-    const result = runCli(["frobnicate"], "my-tool");
+  it("exits 4 with ERR_USAGE when the subcommand is unrecognized", async () => {
+    const result = await runCli(["frobnicate"], "my-tool");
     expect(result.exitCode).toBe(4);
     expect(result.stdout).toBe("");
     expect(firstLine(result.stderr)).toBe(
@@ -113,18 +126,18 @@ describe("runCli dispatch", () => {
     );
   });
 
-  it("treats a leading option as an unknown command rather than ignoring it", () => {
+  it("treats a leading option as an unknown command rather than ignoring it", async () => {
     // Nothing parses options yet, so `--json` reaching dispatch must fail
     // loudly instead of silently selecting no command.
-    const result = runCli(["--json"]);
+    const result = await runCli(["--json"]);
     expect(result.exitCode).toBe(4);
     expect(result.stderr).toContain('unknown command "--json"');
   });
 
   it.each(STUB_SUBCOMMANDS)(
     "exits 4 with a not-yet-implemented message for %s",
-    (name) => {
-      const result = runCli([name], "my-tool");
+    async (name) => {
+      const result = await runCli([name], "my-tool");
       expect(result.exitCode).toBe(4);
       expect(result.stdout).toBe("");
       expect(firstLine(result.stderr)).toBe(
@@ -133,27 +146,29 @@ describe("runCli dispatch", () => {
     },
   );
 
-  it("points at the help flag on every usage error", () => {
-    expect(runCli(["frobnicate"], "my-tool").stderr).toContain(
+  it("points at the help flag on every usage error", async () => {
+    expect((await runCli(["frobnicate"], "my-tool")).stderr).toContain(
       "Run `my-tool --help` for usage.",
     );
   });
 
-  it("reports a usage error with an ERR_-prefixed code", () => {
+  it("reports a usage error with an ERR_-prefixed code", async () => {
     // The code is the contract a CI log or a wrapper script branches on; the
     // prose after it is not. See the `designing-errors` skill.
-    const code = /^[^:]+: (\S+):/.exec(firstLine(runCli(["frobnicate"]).stderr))?.[1];
+    const code = /^[^:]+: (\S+):/.exec(
+      firstLine((await runCli(["frobnicate"])).stderr),
+    )?.[1];
     expect(code).toMatch(ERROR_CODE);
   });
 
-  it("ends stderr with a newline so a terminal does not glue on the next line", () => {
-    expect(runCli(["frobnicate"]).stderr.endsWith("\n")).toBe(true);
+  it("ends stderr with a newline so a terminal does not glue on the next line", async () => {
+    expect((await runCli(["frobnicate"])).stderr.endsWith("\n")).toBe(true);
   });
 });
 
 describe("runCli explain", () => {
-  it("wires settings + spec + matcher and prints the firing set with layer, file, and line", () => {
-    const result = runCli(
+  it("wires settings + spec + matcher and prints the firing set with layer, file, and line", async () => {
+    const result = await runCli(
       ["explain", "PreToolUse", "Bash"],
       "hookassert",
       explainDeps(),
@@ -166,8 +181,8 @@ describe("runCli explain", () => {
     expect(result.stdout).toContain("./scripts/guard.sh");
   });
 
-  it("prints a non-firing matcher's MatcherOutcome reason", () => {
-    const result = runCli(
+  it("prints a non-firing matcher's MatcherOutcome reason", async () => {
+    const result = await runCli(
       ["explain", "PreToolUse", "Bash"],
       "hookassert",
       explainDeps(),
@@ -180,8 +195,8 @@ describe("runCli explain", () => {
     );
   });
 
-  it("prints 'undetermined' when no Claude Code version can be resolved", () => {
-    const result = runCli(
+  it("prints 'undetermined' when no Claude Code version can be resolved", async () => {
+    const result = await runCli(
       ["explain", "PreToolUse", "Bash"],
       "hookassert",
       explainDeps(),
@@ -190,8 +205,8 @@ describe("runCli explain", () => {
     expect(result.stdout).toContain("Claude Code version: undetermined");
   });
 
-  it("prints the resolved Claude Code version when one is known", () => {
-    const result = runCli(
+  it("prints the resolved Claude Code version when one is known", async () => {
+    const result = await runCli(
       ["explain", "PreToolUse", "Bash", "--claude-version", "2.1.300"],
       "hookassert",
       explainDeps(),
@@ -200,8 +215,8 @@ describe("runCli explain", () => {
     expect(result.stdout).toContain("Claude Code version: 2.1.300");
   });
 
-  it("always prints the spec's declared claudeCodeRange", () => {
-    const result = runCli(
+  it("always prints the spec's declared claudeCodeRange", async () => {
+    const result = await runCli(
       ["explain", "PreToolUse", "Bash"],
       "hookassert",
       explainDeps(),
@@ -210,8 +225,8 @@ describe("runCli explain", () => {
     expect(result.stdout).toContain(`Spec range: ${SPEC_RANGE}`);
   });
 
-  it("--claude-version overrides HOOKASSERT_CLAUDE_VERSION", () => {
-    const result = runCli(
+  it("--claude-version overrides HOOKASSERT_CLAUDE_VERSION", async () => {
+    const result = await runCli(
       ["explain", "PreToolUse", "Bash", "--claude-version", "2.1.300"],
       "hookassert",
       explainDeps({ env: { HOOKASSERT_CLAUDE_VERSION: "2.1.260" } }),
@@ -221,8 +236,8 @@ describe("runCli explain", () => {
     expect(result.stdout).not.toContain("2.1.260");
   });
 
-  it("uses HOOKASSERT_CLAUDE_VERSION when --claude-version is absent", () => {
-    const result = runCli(
+  it("uses HOOKASSERT_CLAUDE_VERSION when --claude-version is absent", async () => {
+    const result = await runCli(
       ["explain", "PreToolUse", "Bash"],
       "hookassert",
       explainDeps({ env: { HOOKASSERT_CLAUDE_VERSION: "2.1.280" } }),
@@ -231,35 +246,39 @@ describe("runCli explain", () => {
     expect(result.stdout).toContain("Claude Code version: 2.1.280");
   });
 
-  it("exits 4 with ERR_USAGE when explain is given an unrecognized option", () => {
-    const result = runCli(["explain", "--bogus"], "hookassert", explainDeps());
+  it("exits 4 with ERR_USAGE when explain is given an unrecognized option", async () => {
+    const result = await runCli(["explain", "--bogus"], "hookassert", explainDeps());
 
     expect(result.exitCode).toBe(4);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("ERR_USAGE");
   });
 
-  it("exits 4 with ERR_USAGE when <event> is missing", () => {
-    const result = runCli(["explain"], "hookassert", explainDeps());
+  it("exits 4 with ERR_USAGE when <event> is missing", async () => {
+    const result = await runCli(["explain"], "hookassert", explainDeps());
 
     expect(result.exitCode).toBe(4);
     expect(result.stderr).toContain("ERR_USAGE");
     expect(result.stderr).toContain("<event>");
   });
 
-  it("exits 4 with ERR_USAGE when <event> is not a documented Claude Code event", () => {
-    const result = runCli(["explain", "NotARealEvent"], "hookassert", explainDeps());
+  it("exits 4 with ERR_USAGE when <event> is not a documented Claude Code event", async () => {
+    const result = await runCli(
+      ["explain", "NotARealEvent"],
+      "hookassert",
+      explainDeps(),
+    );
 
     expect(result.exitCode).toBe(4);
     expect(result.stderr).toContain("ERR_USAGE");
     expect(result.stderr).toContain("NotARealEvent");
   });
 
-  it("treats a set-but-empty HOOKASSERT_CLAUDE_VERSION as no version at all", () => {
+  it("treats a set-but-empty HOOKASSERT_CLAUDE_VERSION as no version at all", async () => {
     // A CI job that declares the variable without a value, or an
     // `export HOOKASSERT_CLAUDE_VERSION="$(… || true)"` that produced
     // nothing, must fall back to "undetermined" rather than failing the run.
-    const result = runCli(
+    const result = await runCli(
       ["explain", "PreToolUse", "Bash"],
       "hookassert",
       explainDeps({ env: { HOOKASSERT_CLAUDE_VERSION: "" } }),
@@ -269,8 +288,8 @@ describe("runCli explain", () => {
     expect(result.stdout).toContain("Claude Code version: undetermined");
   });
 
-  it("names HOOKASSERT_CLAUDE_VERSION when the invalid version came from it", () => {
-    const result = runCli(
+  it("names HOOKASSERT_CLAUDE_VERSION when the invalid version came from it", async () => {
+    const result = await runCli(
       ["explain", "PreToolUse", "Bash"],
       "hookassert",
       explainDeps({ env: { HOOKASSERT_CLAUDE_VERSION: "not-a-version" } }),
@@ -280,11 +299,11 @@ describe("runCli explain", () => {
     expect(result.stderr).toContain("HOOKASSERT_CLAUDE_VERSION");
   });
 
-  it("exits 4 with ERR_USAGE on an unexpected extra positional argument", () => {
+  it("exits 4 with ERR_USAGE on an unexpected extra positional argument", async () => {
     // `--settings a.json b.json` parses as one settings file plus a stray
     // positional; accepting it silently would make `b.json` the matcher
     // target and report a wrong firing set at exit 0.
-    const result = runCli(
+    const result = await runCli(
       ["explain", "PreToolUse", "Bash", "Write"],
       "hookassert",
       explainDeps(),
@@ -296,8 +315,8 @@ describe("runCli explain", () => {
     expect(result.stderr).toContain("Write");
   });
 
-  it("exits 4 with ERR_USAGE when --claude-version is not major.minor.patch", () => {
-    const result = runCli(
+  it("exits 4 with ERR_USAGE when --claude-version is not major.minor.patch", async () => {
+    const result = await runCli(
       ["explain", "PreToolUse", "Bash", "--claude-version", "not-a-version"],
       "hookassert",
       explainDeps(),
@@ -307,9 +326,9 @@ describe("runCli explain", () => {
     expect(result.stderr).toContain("ERR_USAGE");
   });
 
-  it("performs exactly zero spawns", () => {
+  it("performs exactly zero spawns", async () => {
     const spawner = new CountingSpawner();
-    const result = runCli(
+    const result = await runCli(
       ["explain", "PreToolUse", "Bash"],
       "hookassert",
       explainDeps({ spawner }),
@@ -319,8 +338,8 @@ describe("runCli explain", () => {
     expect(spawner.calls).toHaveLength(0);
   });
 
-  it("accepts --format pretty explicitly", () => {
-    const result = runCli(
+  it("accepts --format pretty explicitly", async () => {
+    const result = await runCli(
       ["explain", "PreToolUse", "Bash", "--format", "pretty"],
       "hookassert",
       explainDeps(),
@@ -329,8 +348,8 @@ describe("runCli explain", () => {
     expect(result.exitCode).toBe(0);
   });
 
-  it.each(["json", "github"])("selects the %s reporter", (format) => {
-    const result = runCli(
+  it.each(["json", "github"])("selects the %s reporter", async (format) => {
+    const result = await runCli(
       ["explain", "PreToolUse", "Bash", "--format", format],
       "hookassert",
       explainDeps(),
@@ -340,8 +359,8 @@ describe("runCli explain", () => {
     expect(result.stderr).toBe("");
   });
 
-  it("exits 4 with ERR_USAGE for an unrecognized --format value", () => {
-    const result = runCli(
+  it("exits 4 with ERR_USAGE for an unrecognized --format value", async () => {
+    const result = await runCli(
       ["explain", "PreToolUse", "Bash", "--format", "xml"],
       "hookassert",
       explainDeps(),
@@ -353,12 +372,12 @@ describe("runCli explain", () => {
     expect(result.stderr).toContain("xml");
   });
 
-  it("rejects an unrecognized --format before a failing --settings path is even checked", () => {
+  it("rejects an unrecognized --format before a failing --settings path is even checked", async () => {
     // The format must be validated before any I/O: --settings resolution,
     // spec loading, and loadSettings all come later in runExplain, so a
     // failing --settings path must never mask a typo'd --format behind an
     // unrelated ERR_SETTINGS_NOT_FOUND.
-    const result = runCli(
+    const result = await runCli(
       [
         "explain",
         "PreToolUse",
@@ -378,8 +397,8 @@ describe("runCli explain", () => {
     expect(result.stderr).toContain("xml");
   });
 
-  it("rejects --emit-fixtures as not implemented yet", () => {
-    const result = runCli(
+  it("rejects --emit-fixtures as not implemented yet", async () => {
+    const result = await runCli(
       ["explain", "PreToolUse", "Bash", "--emit-fixtures", "/tmp/hookassert-out"],
       "hookassert",
       explainDeps(),
@@ -390,8 +409,8 @@ describe("runCli explain", () => {
     expect(result.stderr).toContain("--emit-fixtures");
   });
 
-  it("adds an explicit-layer settings file with --settings", () => {
-    const result = runCli(
+  it("adds an explicit-layer settings file with --settings", async () => {
+    const result = await runCli(
       ["explain", "PreToolUse", "Bash", "--settings", EXPLICIT_SETTINGS_FILE],
       "hookassert",
       explainDeps({ cwd: NO_SUCH_DIR }),
@@ -402,12 +421,12 @@ describe("runCli explain", () => {
     expect(result.stdout).toContain("./scripts/explicit-guard.sh");
   });
 
-  it("fails with ERR_SETTINGS_NOT_FOUND when a --settings file does not exist", () => {
+  it("fails with ERR_SETTINGS_NOT_FOUND when a --settings file does not exist", async () => {
     // A missing *discovered* layer is not an error, but a file the caller
     // named is: without this, a typo prints "Firing hooks: none" at exit 0 —
     // a confident wrong answer from the command whose whole job is saying
     // which hooks fire.
-    const result = runCli(
+    const result = await runCli(
       ["explain", "PreToolUse", "Bash", "--settings", "no-such-settings.json"],
       "hookassert",
       explainDeps({ cwd: PROJECT_WITH_HOOKS_DIR }),
@@ -418,11 +437,11 @@ describe("runCli explain", () => {
     expect(result.stdout).toBe("");
   });
 
-  it("keeps a missing discovered settings layer lenient", () => {
+  it("keeps a missing discovered settings layer lenient", async () => {
     // The mirror of the case above: discovery naming a file that does not
     // exist stays a zero-hook contribution, so the strictness added for
     // --settings must not leak into the three well-known layers.
-    const result = runCli(
+    const result = await runCli(
       ["explain", "PreToolUse", "Bash"],
       "hookassert",
       explainDeps({ cwd: NO_SUCH_DIR }),
@@ -431,18 +450,18 @@ describe("runCli explain", () => {
     expect(result.exitCode).toBe(0);
   });
 
-  it("rethrows a non-HookassertError rather than reporting it as a usage failure", () => {
+  it("rethrows a non-HookassertError rather than reporting it as a usage failure", async () => {
     // Passing a directory as --settings makes readFileSync fail with a plain
     // EISDIR Error, not one of loadSourceHooks' own recognized cases — this
     // proves runCli only turns a HookassertError into a graceful CliResult
     // and lets anything else propagate rather than mislabeling it.
-    expect(() =>
+    await expect(
       runCli(
         ["explain", "PreToolUse", "Bash", "--settings", PROJECT_WITH_HOOKS_DIR],
         "hookassert",
         explainDeps(),
       ),
-    ).toThrow(/EISDIR/);
+    ).rejects.toThrow(/EISDIR/);
   });
 });
 
@@ -480,16 +499,16 @@ describe("main", () => {
     return { stdout, stderr };
   }
 
-  it("writes the usage text to stdout and returns 0 for --help", () => {
+  it("writes the usage text to stdout and returns 0 for --help", async () => {
     const streams = captureStreams();
-    expect(main(["--help"])).toBe(0);
+    expect(await main(["--help"])).toBe(0);
     expect(streams.stdout.join("")).toContain("Usage: hookassert <command> [options]");
     expect(streams.stderr.join("")).toBe("");
   });
 
-  it("writes a usage error to stderr and returns its exit code", () => {
+  it("writes a usage error to stderr and returns its exit code", async () => {
     const streams = captureStreams();
-    expect(main(["frobnicate"])).toBe(4);
+    expect(await main(["frobnicate"])).toBe(4);
     expect(streams.stdout.join("")).toBe("");
     expect(streams.stderr.join("")).toContain("ERR_USAGE");
   });

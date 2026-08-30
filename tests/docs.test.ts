@@ -196,21 +196,27 @@ describe("documented examples compile against the public API", () => {
   );
 });
 
-describe("README's command list", () => {
-  // The suite above type-checks the documented *types*; the commands are the
-  // other half of what a reader is promised, and nothing type-checks prose.
-  // The usage text is the source of truth — the README is a copy of it that
-  // Prettier will happily keep formatting long after it stopped being true.
-  const usage = runCli(["--help"], packageName).stdout;
-  const commands = [...usage.matchAll(/^ {2}([a-z]+) {2,}\S/gm)].map(
-    (match) => match[1] ?? "",
-  );
+// The suite above type-checks the documented *types*; the commands are the
+// other half of what a reader is promised, and nothing type-checks prose.
+// The usage text is the source of truth — the README is a copy of it that
+// Prettier will happily keep formatting long after it stopped being true.
+//
+// Hoisted to a real module-level top-level `await`, rather than computed
+// inside the `describe` callback below: `it.each(commands)` needs `commands`
+// synchronously at collection time to generate one named test per command,
+// and a `describe` callback itself cannot be `async` — vitest calls it
+// synchronously to collect the suite.
+const USAGE_TEXT = (await runCli(["--help"], packageName)).stdout;
+const README_COMMANDS = [...USAGE_TEXT.matchAll(/^ {2}([a-z]+) {2,}\S/gm)].map(
+  (match) => match[1] ?? "",
+);
 
+describe("README's command list", () => {
   it("found the command list in the usage text", () => {
-    expect(commands).not.toEqual([]);
+    expect(README_COMMANDS).not.toEqual([]);
   });
 
-  it.each(commands)("documents the %s command", (name) => {
+  it.each(README_COMMANDS)("documents the %s command", (name) => {
     const readme = readFileSync(path.join(repoRoot, "README.md"), "utf8");
     expect(readme).toContain(`${packageName} ${name}`);
   });

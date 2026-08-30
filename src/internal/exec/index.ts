@@ -25,4 +25,5 @@ export type {
 } from "./executor.js";
 export { createUnimplementedSpawner, NodeSpawner } from "./spawner.js";
 export type { SpawnRequest, Spawner } from "./spawner.js";
+export { NodeVersionProbe } from "./version.js";
 export type { VersionProbe } from "./version.js";
