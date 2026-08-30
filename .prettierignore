@@ -18,9 +18,3 @@ CHANGELOG.md
 
 # Full working copies created by agent sessions; formatted in their own checkout.
 .claude/worktrees/
-
-# Copied verbatim from the incubation ledger and kept byte-identical to it; the
-# repository is the source of truth from here on. `proseWrap: always` reflows its
-# Japanese prose at arbitrary points inside terms ("Claude / Code", "exit / code"),
-# which loses readability without making the document any more consistent.
-REQUIREMENTS.md
