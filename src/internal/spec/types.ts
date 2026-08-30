@@ -59,8 +59,8 @@ export interface ExitCodeEffect {
  */
 export interface PayloadShape {
   readonly verified: boolean;
-  readonly verifiedAt: string | undefined;
-  readonly againstVersion: string | undefined;
+  readonly verifiedAt?: string;
+  readonly againstVersion?: string;
   readonly requiredKeys: readonly string[];
 }
 

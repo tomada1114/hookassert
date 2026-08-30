@@ -192,6 +192,14 @@ describe("table-health: the spec cannot silently go empty", () => {
   });
 });
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value as Record<string, unknown>;
+}
+
+function firstEvent(spec: Record<string, unknown>): Record<string, unknown> {
+  return asRecord(Object.values(asRecord(spec["events"]))[0]);
+}
+
 describe("schema and hand-written guards agree", () => {
   const ajv = new Ajv({ allErrors: true, strict: false });
   const schema = readJson(SCHEMA_PATH);
@@ -222,6 +230,79 @@ describe("schema and hand-written guards agree", () => {
       expect(validateWithAjv(raw), `ajv should reject ${file}`).toBe(false);
       expect(isValidSpec(raw), `guards should reject ${file}`).toBe(false);
     }
+  });
+
+  it("accepts the shipped spec under both validators", () => {
+    const raw = readJson(REAL_SPEC_PATH);
+
+    expect(validateWithAjv(raw), "ajv should accept the shipped spec").toBe(true);
+    expect(isValidSpec(raw), "guards should accept the shipped spec").toBe(true);
+  });
+
+  // The guards are a hand-written mirror of the schema, so every constraint
+  // one side expresses has to be expressed by the other. These mutations are
+  // the ones that used to diverge: `minLength: 1` on a string array's items
+  // and `type: "integer"` on a timeout were only in the schema, while the
+  // non-empty `specVersion`/`claudeCodeRange` rules were only in the guards.
+  const divergenceCases: readonly [string, (spec: Record<string, unknown>) => void][] =
+    [
+      ["specVersion empty", (s) => (s["specVersion"] = "")],
+      ["claudeCodeRange empty", (s) => (s["claudeCodeRange"] = "")],
+      [
+        "defaults.hookTimeoutMs fractional",
+        (s) => (asRecord(s["defaults"])["hookTimeoutMs"] = 1.5),
+      ],
+      [
+        "defaults.reducedTimeoutMs entry fractional",
+        (s) => (asRecord(asRecord(s["defaults"])["reducedTimeoutMs"])["Stop"] = 1.5),
+      ],
+      ["knownTools empty item", (s) => (s["knownTools"] = [""])],
+      [
+        "hookEnv.provided empty item",
+        (s) => (asRecord(s["hookEnv"])["provided"] = [""]),
+      ],
+      [
+        "matcherSyntax.narrowExactMatchEvents empty item",
+        (s) => (asRecord(s["matcherSyntax"])["narrowExactMatchEvents"] = [""]),
+      ],
+      [
+        "event.jsonDecisions empty item",
+        (s) => (firstEvent(s)["jsonDecisions"] = [""]),
+      ],
+      [
+        "event.payloadShape.requiredKeys empty item",
+        (s) => (asRecord(firstEvent(s)["payloadShape"])["requiredKeys"] = [""]),
+      ],
+      [
+        "event.matcherTargets enum field empty",
+        (s) =>
+          (firstEvent(s)["matcherTargets"] = {
+            kind: "enum",
+            field: "",
+            values: ["a"],
+          }),
+      ],
+      [
+        "event.matcherTargets enum values empty item",
+        (s) =>
+          (firstEvent(s)["matcherTargets"] = {
+            kind: "enum",
+            field: "source",
+            values: [""],
+          }),
+      ],
+      [
+        "event.matcherTargets field kind's field empty",
+        (s) => (firstEvent(s)["matcherTargets"] = { kind: "field", field: "" }),
+      ],
+    ];
+
+  it.each(divergenceCases)("ajv and guards both reject: %s", (_name, mutate) => {
+    const raw = readJson(fixturePath("valid-minimal.json")) as Record<string, unknown>;
+    mutate(raw);
+
+    expect(validateWithAjv(raw), "ajv should reject").toBe(false);
+    expect(isValidSpec(raw), "guards should reject").toBe(false);
   });
 });
 

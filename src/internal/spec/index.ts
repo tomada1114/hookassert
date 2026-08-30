@@ -22,7 +22,7 @@ export type {
   Spec,
   SpecDefaults,
   StderrDestination,
-} from "./guards.js";
+} from "./types.js";
 export { loadSpec, loadSpecFile } from "./load.js";
 export { isInDeclaredRange, meetsSinceVersion, parseClaudeVersion } from "./version.js";
 export type { ClaudeVersion } from "./version.js";

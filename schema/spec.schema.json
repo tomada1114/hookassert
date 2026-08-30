@@ -18,10 +18,12 @@
   "properties": {
     "specVersion": {
       "type": "string",
+      "minLength": 1,
       "description": "Version of this schema's own shape, not of Claude Code."
     },
     "claudeCodeRange": {
       "type": "string",
+      "minLength": 1,
       "description": "The Claude Code version range this file's facts were transcribed against, as a space-separated list of comparator expressions (e.g. \">=2.1.251 <2.2.0\")."
     },
     "defaults": {

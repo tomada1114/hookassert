@@ -13,20 +13,7 @@
  * `isValidSpec` is the boolean type guard built on top of it.
  */
 
-import type {
-  EventSpec,
-  ExitCodeEffect,
-  ExitCodeEffectKind,
-  HookEnv,
-  MatcherRule,
-  MatcherSyntax,
-  MatcherTableRow,
-  MatcherTargets,
-  PayloadShape,
-  Spec,
-  SpecDefaults,
-  StderrDestination,
-} from "./types.js";
+import type { ExitCodeEffectKind, Spec, StderrDestination } from "./types.js";
 
 const EXIT_CODE_EFFECT_KINDS: readonly ExitCodeEffectKind[] = [
   "block",
@@ -47,6 +34,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+/**
+ * The array form the schema spells `items: { type: "string", minLength: 1 }`.
+ * Kept separate from {@link isStringArray} because a few arrays — a matcher
+ * table row's `matches`/`doesNotMatch` — do allow the empty string.
+ */
+function isNonEmptyStringArray(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.every((item) => typeof item === "string" && item.length > 0)
+  );
 }
 
 /** Narrows `value` to one of a fixed set of string literals. */
@@ -126,20 +125,23 @@ function checkMatcherTargets(
     }
     case "enum": {
       if (checkObjectShape(violations, path, value, ["kind", "field", "values"])) {
-        if (typeof value["field"] !== "string") {
-          violations.add(`${path}.field`, "must be a string");
+        if (typeof value["field"] !== "string" || value["field"].length === 0) {
+          violations.add(`${path}.field`, "must be a non-empty string");
         }
         const values = value["values"];
-        if (!isStringArray(values) || values.length === 0) {
-          violations.add(`${path}.values`, "must be a non-empty array of strings");
+        if (!isNonEmptyStringArray(values) || values.length === 0) {
+          violations.add(
+            `${path}.values`,
+            "must be a non-empty array of non-empty strings",
+          );
         }
       }
       return;
     }
     case "field": {
       if (checkObjectShape(violations, path, value, ["kind", "field"])) {
-        if (typeof value["field"] !== "string") {
-          violations.add(`${path}.field`, "must be a string");
+        if (typeof value["field"] !== "string" || value["field"].length === 0) {
+          violations.add(`${path}.field`, "must be a non-empty string");
         }
       }
       return;
@@ -197,8 +199,8 @@ function checkPayloadShape(violations: Violations, path: string, value: unknown)
   if (typeof value["verified"] !== "boolean") {
     violations.add(`${path}.verified`, "must be a boolean");
   }
-  if (!isStringArray(value["requiredKeys"])) {
-    violations.add(`${path}.requiredKeys`, "must be an array of strings");
+  if (!isNonEmptyStringArray(value["requiredKeys"])) {
+    violations.add(`${path}.requiredKeys`, "must be an array of non-empty strings");
   }
   if (value["verified"] === true) {
     if (typeof value["verifiedAt"] !== "string") {
@@ -243,8 +245,8 @@ function checkEventSpec(violations: Violations, path: string, value: unknown): v
   if (typeof value["honorsExit2"] !== "boolean") {
     violations.add(`${path}.honorsExit2`, "must be a boolean");
   }
-  if (!isStringArray(value["jsonDecisions"])) {
-    violations.add(`${path}.jsonDecisions`, "must be an array of strings");
+  if (!isNonEmptyStringArray(value["jsonDecisions"])) {
+    violations.add(`${path}.jsonDecisions`, "must be an array of non-empty strings");
   }
   const exitCodeEffects = value["exitCodeEffects"];
   if (!Array.isArray(exitCodeEffects)) {
@@ -298,8 +300,11 @@ function checkMatcherSyntax(
   ) {
     violations.add(`${path}.exactListPattern`, "must be a non-empty string");
   }
-  if (!isStringArray(value["narrowExactMatchEvents"])) {
-    violations.add(`${path}.narrowExactMatchEvents`, "must be an array of strings");
+  if (!isNonEmptyStringArray(value["narrowExactMatchEvents"])) {
+    violations.add(
+      `${path}.narrowExactMatchEvents`,
+      "must be an array of non-empty strings",
+    );
   }
   if (
     typeof value["narrowExactListPattern"] !== "string" ||
@@ -334,8 +339,8 @@ function checkDefaults(violations: Violations, path: string, value: unknown): vo
     "agentHookTimeoutMs",
   ] as const) {
     const timeout = value[key];
-    if (typeof timeout !== "number" || timeout < 0) {
-      violations.add(`${path}.${key}`, "must be a non-negative number");
+    if (typeof timeout !== "number" || !Number.isInteger(timeout) || timeout < 0) {
+      violations.add(`${path}.${key}`, "must be a non-negative integer");
     }
   }
   const reducedTimeoutMs = value["reducedTimeoutMs"];
@@ -343,10 +348,10 @@ function checkDefaults(violations: Violations, path: string, value: unknown): vo
     violations.add(`${path}.reducedTimeoutMs`, "must be an object");
   } else {
     for (const [key, timeout] of Object.entries(reducedTimeoutMs)) {
-      if (typeof timeout !== "number" || timeout < 0) {
+      if (typeof timeout !== "number" || !Number.isInteger(timeout) || timeout < 0) {
         violations.add(
           `${path}.reducedTimeoutMs.${key}`,
-          "must be a non-negative number",
+          "must be a non-negative integer",
         );
       }
     }
@@ -357,8 +362,8 @@ function checkHookEnv(violations: Violations, path: string, value: unknown): voi
   if (!checkObjectShape(violations, path, value, ["provided"])) {
     return;
   }
-  if (!isStringArray(value["provided"])) {
-    violations.add(`${path}.provided`, "must be an array of strings");
+  if (!isNonEmptyStringArray(value["provided"])) {
+    violations.add(`${path}.provided`, "must be an array of non-empty strings");
   }
 }
 
@@ -430,8 +435,8 @@ export function validateSpec(value: unknown): readonly string[] {
   checkDefaults(violations, "$.defaults", value["defaults"]);
   checkHookEnv(violations, "$.hookEnv", value["hookEnv"]);
   checkMatcherSyntax(violations, "$.matcherSyntax", value["matcherSyntax"]);
-  if (!isStringArray(value["knownTools"])) {
-    violations.add("$.knownTools", "must be an array of strings");
+  if (!isNonEmptyStringArray(value["knownTools"])) {
+    violations.add("$.knownTools", "must be an array of non-empty strings");
   }
 
   const events = value["events"];
@@ -459,20 +464,3 @@ export function validateSpec(value: unknown): readonly string[] {
 export function isValidSpec(value: unknown): value is Spec {
   return validateSpec(value).length === 0;
 }
-
-// Re-exported so guards.ts's own consumers (spec/load.ts, tests) can name
-// the pieces this module validates without importing ./types.js twice.
-export type {
-  EventSpec,
-  ExitCodeEffect,
-  ExitCodeEffectKind,
-  HookEnv,
-  MatcherRule,
-  MatcherSyntax,
-  MatcherTableRow,
-  MatcherTargets,
-  PayloadShape,
-  Spec,
-  SpecDefaults,
-  StderrDestination,
-};
