@@ -10,6 +10,7 @@ import { parseArgs } from "node:util";
 
 import {
   assertCase,
+  isStubOnly,
   summarize,
   type CaseObservation,
 } from "./internal/assert/index.js";
@@ -28,7 +29,7 @@ import {
   type ExecutionPlan,
   type ExecutionStep,
 } from "./internal/exec/index.js";
-import { createUnimplementedSpawner, type Spawner } from "./internal/exec/spawner.js";
+import { NodeSpawner, type Spawner } from "./internal/exec/spawner.js";
 import type { VersionProbe } from "./internal/exec/version.js";
 import {
   loadFixtures,
@@ -242,11 +243,13 @@ export interface CliDeps {
    * Whether `test`'s consent gate treats this run as interactive.
    *
    * @remarks
-   * Defaults to `process.stdout.isTTY === true` — never `process.env.CI`,
-   * which answers a different question ("is a CI runner driving this
-   * process") than "can a human see and answer a prompt right now."
-   * Overridable so a test can exercise both branches of the consent gate
-   * without an actual terminal attached.
+   * Defaults to `process.stdout.isTTY === true && process.stdin.isTTY ===
+   * true` — never `process.env.CI`, which answers a different question ("is a
+   * CI runner driving this process") than "can a human see and answer a
+   * prompt right now." Both streams have to be terminals, because the prompt
+   * is printed on one and read from the other. Overridable so a test can
+   * exercise both branches of the consent gate without an actual terminal
+   * attached.
    */
   readonly isTTY: boolean;
 
@@ -279,9 +282,13 @@ function resolveDeps(overrides: Partial<CliDeps>): CliDeps {
     cwd: overrides.cwd ?? process.cwd(),
     home: overrides.home ?? homedir(),
     env: overrides.env ?? process.env,
-    spawner: overrides.spawner ?? createUnimplementedSpawner(),
+    spawner: overrides.spawner ?? new NodeSpawner(),
     specPath: overrides.specPath ?? SPEC_PATH,
-    isTTY: overrides.isTTY ?? process.stdout.isTTY,
+    // Both streams, not stdout alone: `realConfirm` reads the answer from
+    // stdin, and a `question()` on a stdin already at EOF (`hookassert test
+    // … < /dev/null`) never settles, hanging the run at the prompt. `=== true`
+    // because `isTTY` is `undefined`, not `false`, on a non-terminal stream.
+    isTTY: overrides.isTTY ?? (process.stdout.isTTY && process.stdin.isTTY),
     confirm: overrides.confirm ?? realConfirm,
   };
 }
@@ -537,35 +544,22 @@ function includedHooksForCase(
   return { candidates, excludedHooks };
 }
 
-/** Whether `expect` declares no assertion at all — mirrors `assertCase.ts`'s own private predicate. */
-function isEmptyExpectation(caseData: FixtureCase): boolean {
-  const { expect } = caseData;
-  return (
-    expect.fires === undefined &&
-    expect.decision === undefined &&
-    expect.exitCode === undefined &&
-    expect.stdoutContains === undefined &&
-    expect.stderrContains === undefined &&
-    expect.context === undefined &&
-    expect.updatedInput === undefined &&
-    expect.timedOut === undefined
-  );
-}
-
 /**
- * Whether `caseData` should never enter the spawn plan at all: an explicit
- * `dryRun`, `--dry-run` applied to the whole run, or a case that declares
- * only stubs and nothing to assert (`assertCase`'s own `"stub-only"` case).
+ * Whether `caseData` should never enter the spawn plan at all: a `dryRun`
+ * case (`--dry-run` is already folded into every case's own `dryRun` by the
+ * time this is asked), or a case that declares only stubs and nothing to
+ * assert.
+ *
+ * @remarks
+ * Both halves are `assertCase`'s own verdict, borrowed rather than restated:
+ * a case this returns `true` for is exactly one `assertCase` reports as
+ * `"skipped"`. Reimplementing the stub-only test here — it reads every field
+ * of `FixtureExpectation` — is what would let the two drift the next time a
+ * field is added to that interface, leaving a case the plan spawns for and
+ * the assert engine then skips.
  */
-function isPreSkipped(caseData: FixtureCase, dryRunFlag: boolean): boolean {
-  if (caseData.dryRun === true || dryRunFlag) {
-    return true;
-  }
-  return (
-    caseData.stub !== undefined &&
-    Object.keys(caseData.stub).length > 0 &&
-    isEmptyExpectation(caseData)
-  );
+function isPreSkipped(caseData: FixtureCase): boolean {
+  return caseData.dryRun === true || isStubOnly(caseData);
 }
 
 /** Resolve one case's working-directory override to an absolute path, or `undefined` to use the run's own project root. */
@@ -615,8 +609,19 @@ function buildExecDepsForFile(
 /** One command a step would actually spawn, described for a human at the consent prompt. */
 function describeStepForConsent(step: ExecutionStep): string {
   const form = step.hook.args === undefined ? "shell" : "exec";
-  const args = step.hook.args === undefined ? "" : ` ${step.hook.args.join(" ")}`;
-  return `  [${form}] ${step.hook.command}${args}`;
+  // Quoted, not bare-joined: this line is the whole basis for the answer the
+  // user gives, so an argument containing a space, a quote or a newline must
+  // not read as two arguments, or as an early end to the command list.
+  const args =
+    step.hook.args === undefined
+      ? ""
+      : ` ${step.hook.args.map(quoteForConsent).join(" ")}`;
+  return `  [${form}] ${quoteForConsent(step.hook.command)}${args}`;
+}
+
+/** Render one command word for the consent prompt, quoting it when it is not a single plain word. */
+function quoteForConsent(word: string): string {
+  return /^[\w@%+=:,./-]+$/.test(word) ? word : JSON.stringify(word);
 }
 
 /**
@@ -763,7 +768,7 @@ async function runTest(args: readonly string[], deps: CliDeps): Promise<CliResul
   );
   const fixtureSet = loadFixtures(fixturePaths, spec);
 
-  const probe = new NodeVersionProbe(deps.spawner);
+  const probe = new NodeVersionProbe(deps.spawner, deps.cwd, deps.env);
   const versionContext = await resolveVersionContextForTest(
     parsed.values["claude-version"],
     deps.env,
@@ -823,7 +828,7 @@ async function runTest(args: readonly string[], deps: CliDeps): Promise<CliResul
           : rawCaseData;
 
       let firstStep: ExecutionStep | undefined;
-      if (!isPreSkipped(caseData, dryRunFlag)) {
+      if (!isPreSkipped(caseData)) {
         match.firing.forEach((hook, hookIndex) => {
           const step: ExecutionStep = {
             event: caseData.event,
@@ -936,8 +941,7 @@ async function runTest(args: readonly string[], deps: CliDeps): Promise<CliResul
  * @param executable Name or path shown in the usage line.
  * @param deps Dependencies to override; anything omitted falls back to the
  * live process (`process.cwd()`, `os.homedir()`, `process.env`) or, for
- * `spawner`, a placeholder that rejects every call — see
- * `src/internal/exec/spawner.ts`.
+ * `spawner`, the real `NodeSpawner` — see `src/internal/exec/spawner.ts`.
  * @returns The process result a caller should observe.
  */
 export async function runCli(

@@ -11,6 +11,6 @@
  * is re-exported from `src/index.ts` in the meantime.
  */
 
-export { assertCase } from "./assertCase.js";
+export { assertCase, isStubOnly } from "./assertCase.js";
 export { summarize } from "./summarize.js";
 export type { CaseObservation } from "./types.js";

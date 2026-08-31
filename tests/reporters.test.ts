@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import { runCli } from "../src/cli.js";
 import { UsageError } from "../src/internal/errors.js";
+import { createUnimplementedSpawner } from "../src/internal/exec/spawner.js";
 import type { MatcherOutcome } from "../src/internal/matcher/index.js";
 import {
   isReportFormat,
@@ -25,9 +26,10 @@ import {
 import { hooksForEvent, loadSettings } from "../src/internal/settings/index.js";
 import type { Provenance, ResolvedHook } from "../src/types.js";
 
-// Reaching src/internal/report/, src/internal/matcher/, and
-// src/internal/settings/ directly (rather than through src/index.ts's
-// exports, per the writing-tests skill) is a deliberate, narrowly scoped
+// Reaching src/internal/report/, src/internal/matcher/,
+// src/internal/settings/ and src/internal/exec/ directly (rather than through
+// src/index.ts's exports, per the writing-tests skill) is a deliberate,
+// narrowly scoped
 // exception: none of these modules has a public surface in this issue and
 // never will one for its own plumbing types — see eslint.config.mjs's
 // "tests/static-layer-unit-tests" block for the full reasoning.
@@ -498,6 +500,11 @@ describe("--format selects the correct reporter uniformly for test", () => {
       cwd: PROJECT_WITH_HOOKS_DIR,
       home: path.join(FIXTURES_DIR, "no-such-directory"),
       env: {},
+      // `runCli`'s own default is the real `NodeSpawner`. This suite lives in
+      // the fast unit project and must never launch a process — including
+      // `NodeVersionProbe`'s `claude --version`, which would otherwise really
+      // run on a machine that has Claude Code installed.
+      spawner: createUnimplementedSpawner(),
     };
   }
 

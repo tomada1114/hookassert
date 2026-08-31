@@ -25,8 +25,6 @@
  * session-file format is invented here to fill that gap early.
  */
 
-import process from "node:process";
-
 import { parseClaudeVersion } from "../spec/index.js";
 import type { ClaudeVersion } from "../spec/index.js";
 import type { Spawner } from "./spawner.js";
@@ -62,12 +60,27 @@ const PROBE_TIMEOUT_MS = 5_000;
  * rather than throwing: a probe that cannot determine a version is an
  * ordinary, expected outcome (feeding version resolution's own fallback to
  * `"undetermined"`), not a failure of the run itself.
+ *
+ * `cwd` and the `PATH` value both come from the composition root's own
+ * `CliDeps`, never from `process` directly: a programmatic `runCli(argv, exe,
+ * { cwd, env })` caller has already said which directory and which
+ * environment this run speaks for, and reading the ambient process instead
+ * would probe a different machine state than the one every other stage of the
+ * run uses.
  */
 export class NodeVersionProbe implements VersionProbe {
   readonly #spawner: Spawner;
+  readonly #cwd: string;
+  readonly #env: Readonly<Record<string, string | undefined>>;
 
-  constructor(spawner: Spawner) {
+  constructor(
+    spawner: Spawner,
+    cwd: string,
+    env: Readonly<Record<string, string | undefined>>,
+  ) {
     this.#spawner = spawner;
+    this.#cwd = cwd;
+    this.#env = env;
   }
 
   async detect(): Promise<ClaudeVersion | undefined> {
@@ -77,10 +90,10 @@ export class NodeVersionProbe implements VersionProbe {
         form: "exec",
         command: "claude",
         args: ["--version"],
-        cwd: process.cwd(),
+        cwd: this.#cwd,
         // No allowlisted variables beyond PATH: this probe only needs to
         // resolve `claude` itself, never a hook's own configured environment.
-        env: { PATH: process.env["PATH"] ?? "" },
+        env: { PATH: this.#env["PATH"] ?? "" },
         stdin: "",
         timeoutMs: PROBE_TIMEOUT_MS,
       });

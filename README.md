@@ -37,9 +37,13 @@ hookassert --help
   consent first: on a terminal it prints the exact commands about to run and waits for
   confirmation; `--yes` and `--ci` both skip the prompt, and a non-interactive run given
   neither exits `6` with `ERR_CONSENT_REQUIRED` instead of running anything. `--dry-run`
-  excludes every case from the spawn plan; `--claude-version`, `--settings`,
-  `--timeout`, `--env`, and `--format` (`pretty`/`json`/`github`) all work the same way
-  they do for `explain`. Exits `0` when every case passes (and, with `--ci`, none is
+  excludes every case from the spawn plan; `--claude-version`, `--settings` and
+  `--format` (`pretty`/`json`/`github`) mean exactly what they do for `explain`, and two
+  options are `test`'s own: `--timeout <ms>` sets the default hook timeout in
+  milliseconds for hooks that declare none (a fixture file's own `defaults.timeoutMs`
+  still wins over it), and a repeatable `--env <NAME>` opts one ambient environment
+  variable into every spawned hook's environment by name — a value is never accepted
+  here, only a name. Exits `0` when every case passes (and, with `--ci`, none is
   `unknown` either), `1` when at least one fails, and `3` when there are no failures but
   `--ci` was given and at least one case is `unknown`.
 
