@@ -290,6 +290,26 @@ describe("the consent gate", () => {
     expect(spawner.calls).toHaveLength(0);
   });
 
+  it("on a non-TTY without --yes, --ci, --claude-version, or HOOKASSERT_CLAUDE_VERSION, exits 6 and never spawns the version probe either", async () => {
+    const spawner = new FakeSpawner();
+    const fixturePath = singlePassingCaseFixture();
+
+    // No --claude-version and no env var: resolveVersionContextForTest would
+    // otherwise have to call NodeVersionProbe.detect(), which spawns `claude
+    // --version`. This is the regression case for the bug where the probe
+    // ran before the consent gate did — the assertion that matters here is
+    // the spawn count, not just the exit code.
+    const result = await runCli(
+      ["test", fixturePath],
+      "hookassert",
+      testDeps({ spawner, env: {} }),
+    );
+
+    expect(result.exitCode).toBe(6);
+    expect(result.stderr).toContain("ERR_CONSENT_REQUIRED");
+    expect(spawner.calls).toHaveLength(0);
+  });
+
   it("--yes bypasses the prompt and proceeds", async () => {
     const spawner = new FakeSpawner();
     const fixturePath = singlePassingCaseFixture();
@@ -467,6 +487,36 @@ describe("ClaudeVersion resolution order", () => {
     expect(result.exitCode).toBe(0);
     const probeCall = spawner.calls.find((call) => call.command === "claude");
     expect(probeCall?.args).toEqual(["--version"]);
+  });
+});
+
+describe("--timeout", () => {
+  it("an explicit --timeout above the spec's own ceiling is honored, not clamped", async () => {
+    const spawner = new FakeSpawner();
+    // valid-minimal.json's own defaults.hookTimeoutMs is 600000; the point of
+    // this test is that a --timeout above that ceiling still wins, mirroring
+    // the exemption a hook's own declared timeoutMs already gets.
+    const fixturePath = writeFixture({
+      cases: [{ event: "PreToolUse", tool: "Bash", expect: { decision: "pass" } }],
+    });
+
+    const result = await runCli(
+      [
+        "test",
+        fixturePath,
+        "--claude-version",
+        "2.1.300",
+        "--yes",
+        "--timeout",
+        "900000",
+      ],
+      "hookassert",
+      testDeps({ spawner }),
+    );
+
+    expect(result.exitCode).toBe(0);
+    const hookCall = spawner.calls.find((call) => call.command !== "claude");
+    expect(hookCall?.timeoutMs).toBe(900_000);
   });
 });
 

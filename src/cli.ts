@@ -35,6 +35,7 @@ import {
   loadFixtures,
   type FixtureCase,
   type FixtureFile,
+  type FixtureSet,
 } from "./internal/fixture/index.js";
 import {
   matchHooks,
@@ -562,6 +563,32 @@ function isPreSkipped(caseData: FixtureCase): boolean {
   return caseData.dryRun === true || isStubOnly(caseData);
 }
 
+/**
+ * Whether any case across `fixtureSet` could possibly enter the spawn plan —
+ * decided from the fixtures alone, before settings are discovered, hooks are
+ * matched, or the version is resolved.
+ *
+ * @remarks
+ * A conservative (never a false negative) approximation of "will `spawnWorthy`
+ * end up non-empty": it is exactly {@link isPreSkipped}'s own verdict, which
+ * is unaffected by which hooks actually end up matched, so a case this
+ * returns `true` for may still resolve to zero real steps later (no hook
+ * configured for its event, every firing hook individually stubbed). It can
+ * never return `false` for a case that does end up spawning, which is what
+ * lets `runTest` use it to gate consent before anything downstream of the
+ * fixtures has run at all.
+ */
+function hasSpawnableCase(fixtureSet: FixtureSet, dryRunFlag: boolean): boolean {
+  if (dryRunFlag) {
+    // Folded into every case's own `dryRun` before `isPreSkipped` is asked
+    // (see the per-case fold in `runTest`'s loop) — so none of them can spawn.
+    return false;
+  }
+  return fixtureSet.files.some(({ file }) =>
+    file.cases.some((caseData) => !isPreSkipped(caseData)),
+  );
+}
+
 /** Resolve one case's working-directory override to an absolute path, or `undefined` to use the run's own project root. */
 function resolveStepCwd(
   caseData: FixtureCase,
@@ -585,6 +612,13 @@ function resolveStepCwd(
  * precedence over `--timeout` for that file's own hooks — a fixture's own
  * explicit default is more specific than a run-wide override — which in turn
  * takes precedence over `HOOKASSERT_DEFAULT_TIMEOUT_MS`.
+ *
+ * `explicitDefaultTimeoutMs` is set from `cliTimeoutOverrideMs` only when no
+ * `file.defaults.timeoutMs` applies: `--timeout` is what the design calls "an
+ * override for the whole run", so it must actually win over
+ * `resolveDefaultTimeoutMs`'s ceiling rather than being silently clamped by
+ * it — see `executor.ts`'s own remark on `ExecDeps.explicitDefaultTimeoutMs`.
+ * A file's own declared default stays subject to that ceiling, unchanged.
  */
 function buildExecDepsForFile(
   deps: CliDeps,
@@ -594,6 +628,7 @@ function buildExecDepsForFile(
   cliEnvNames: readonly string[],
 ): ExecDeps {
   const fileEnv = file.defaults?.env ?? {};
+  const fileTimeoutMs = file.defaults?.timeoutMs;
   return {
     spawner: deps.spawner,
     projectRoot: deps.cwd,
@@ -601,8 +636,11 @@ function buildExecDepsForFile(
     providedEnvKeys: spec.hookEnv.provided,
     allowedEnvKeys: [...cliEnvNames, ...Object.keys(fileEnv)],
     hookassertDefaultTimeoutMs:
-      file.defaults?.timeoutMs ?? cliTimeoutOverrideMs ?? HOOKASSERT_DEFAULT_TIMEOUT_MS,
+      fileTimeoutMs ?? cliTimeoutOverrideMs ?? HOOKASSERT_DEFAULT_TIMEOUT_MS,
     specDefaultTimeoutMs: spec.defaults.hookTimeoutMs,
+    ...(fileTimeoutMs === undefined && cliTimeoutOverrideMs !== undefined
+      ? { explicitDefaultTimeoutMs: cliTimeoutOverrideMs }
+      : {}),
   };
 }
 
@@ -625,39 +663,65 @@ function quoteForConsent(word: string): string {
 }
 
 /**
- * Obtain consent to spawn `spawnWorthy` before `test` runs a single one of
- * them.
+ * Whether `test`'s consent gate is answerable at all for this invocation —
+ * checked before anything downstream of the fixtures runs, so a run that
+ * cannot possibly obtain consent fails before it spawns even the version
+ * probe.
+ *
+ * @remarks
+ * This is the "is there anyone to ask, or was consent already given" half of
+ * the gate: it takes only `isTTY`, `yes`, and `ci` — never the firing set,
+ * the spec, or the resolved `ClaudeVersion`, none of which is known yet this
+ * early in `runTest`. The other half — "does this human approve this
+ * specific command list" — is {@link gateConsent}, which runs later, once
+ * the firing set is known, and only for a TTY (this function has already
+ * ruled out every non-interactive, non-consenting case by the time that
+ * runs).
+ *
+ * `runTest` calls this only when {@link hasSpawnableCase} says the run could
+ * spawn something at all — a fixture that is entirely `--dry-run` or
+ * stub-only never needs consent, interactive or not.
+ *
+ * @throws {ConsentRequiredError} the invocation is non-interactive and
+ * neither `--yes` nor `--ci` was given.
+ */
+function assertConsentReachable(isTTY: boolean, yes: boolean, ci: boolean): void {
+  if (isTTY || yes || ci) {
+    return;
+  }
+  throw new ConsentRequiredError(
+    "test needs consent to spawn the hooks its fixtures would run, but is " +
+      "running non-interactively without --yes or --ci. Pass --yes to consent, " +
+      "--ci for a non-interactive CI run, or run in a terminal to confirm interactively.",
+  );
+}
+
+/**
+ * Obtain a human's approval of `spawnWorthy`'s exact command list before
+ * `test` runs a single one of them.
  *
  * @remarks
  * A step whose own `stub` bypasses the spawner never reaches `spawnWorthy` in
  * the first place — see `runTest`'s own filter — so an empty `spawnWorthy`
  * means nothing will actually run, and nothing needs consenting to: this
- * function returns immediately, without checking `yes`, `ci`, or `isTTY` at
- * all. `--yes` and `--ci` both bypass the prompt outright, in that order of
- * appearance below (either is sufficient). Otherwise, a non-TTY invocation
- * fails immediately — there is no one to ask — and a TTY invocation prints
- * the full command list and awaits {@link CliDeps.confirm}'s answer.
+ * function returns immediately, without checking `yes` or `ci` at all.
+ * `--yes` and `--ci` both bypass the prompt outright, in that order of
+ * appearance below (either is sufficient). Otherwise this prints the full
+ * command list and awaits {@link CliDeps.confirm}'s answer — by the time this
+ * runs, {@link assertConsentReachable} has already rejected every
+ * non-interactive invocation that lacked `--yes`/`--ci`, so a non-empty
+ * `spawnWorthy` reaching here is always on a TTY.
  *
- * @throws {ConsentRequiredError} consent was not obtained, either because the
- * invocation was non-interactive without `--yes`/`--ci`, or because the
- * interactive prompt was declined.
+ * @throws {ConsentRequiredError} the interactive prompt was declined.
  */
 async function gateConsent(
-  deps: Pick<CliDeps, "confirm" | "isTTY">,
+  deps: Pick<CliDeps, "confirm">,
   yes: boolean,
   ci: boolean,
   spawnWorthy: readonly ExecutionStep[],
 ): Promise<void> {
   if (spawnWorthy.length === 0 || yes || ci) {
     return;
-  }
-
-  if (!deps.isTTY) {
-    throw new ConsentRequiredError(
-      `test needs consent to spawn ${String(spawnWorthy.length)} command(s) but is ` +
-        "running non-interactively without --yes or --ci. Pass --yes to consent, " +
-        "--ci for a non-interactive CI run, or run in a terminal to confirm interactively.",
-    );
   }
 
   const commandList = spawnWorthy.map(describeStepForConsent).join("\n");
@@ -761,12 +825,27 @@ async function runTest(args: readonly string[], deps: CliDeps): Promise<CliResul
     }
   }
 
+  const dryRunFlag = parsed.values["dry-run"] === true;
+
   const spec = loadSpecFile(deps.specPath);
 
   const fixturePaths = parsed.positionals.map((fixture) =>
     path.resolve(deps.cwd, fixture),
   );
   const fixtureSet = loadFixtures(fixturePaths, spec);
+
+  // Before the probe, not after: a non-interactive invocation without
+  // `--yes`/`--ci` must fail without spawning anything at all, including
+  // `NodeVersionProbe`'s own `claude --version` — issue #11's own acceptance
+  // criterion. `hasSpawnableCase` is decided from the fixtures alone, so a
+  // fixture that is entirely `--dry-run` or stub-only never needs consent.
+  if (hasSpawnableCase(fixtureSet, dryRunFlag)) {
+    assertConsentReachable(
+      deps.isTTY,
+      parsed.values.yes === true,
+      parsed.values.ci === true,
+    );
+  }
 
   const probe = new NodeVersionProbe(deps.spawner, deps.cwd, deps.env);
   const versionContext = await resolveVersionContextForTest(
@@ -782,7 +861,6 @@ async function runTest(args: readonly string[], deps: CliDeps): Promise<CliResul
   });
   const discoveredSettings = loadSettings(discoveredSources);
   const cliEnvNames = parsed.values.env ?? [];
-  const dryRunFlag = parsed.values["dry-run"] === true;
 
   const prepared: PreparedCase[] = [];
   const filePlans: FilePlan[] = [];

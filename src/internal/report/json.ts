@@ -53,10 +53,16 @@ interface JsonRejectedOutcome {
  * `reportVersion` is this contract's own version, independent of the
  * package's own semver — a later issue reshaping this output bumps
  * `reportVersion` and updates the schema in the same change, per
- * `release-impact`.
+ * `release-impact`. `reportType` is a separate, narrower discriminator: both
+ * this shape and `test`'s own `JsonTestReport` (`testReport.ts`) currently
+ * claim `reportVersion: "1"`, since each versions its own shape independently,
+ * so `reportType` is what lets a consumer — or `schema/report.schema.json`,
+ * which pins `"explain"` — tell the two apart before trusting `reportVersion`
+ * to mean this document's shape rather than the other one's.
  */
 export interface JsonExplainReport {
   readonly reportVersion: "1";
+  readonly reportType: "explain";
   readonly header: {
     readonly claudeVersion: string;
     readonly specRange: string;
@@ -95,6 +101,7 @@ export function toJsonReport(report: ExplainReport): JsonExplainReport {
   const ignored = new Set(report.matcherIgnored);
   return {
     reportVersion: "1",
+    reportType: "explain",
     header: {
       claudeVersion: report.header.claudeVersion,
       specRange: report.header.specRange,

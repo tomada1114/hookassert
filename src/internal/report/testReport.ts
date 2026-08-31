@@ -171,9 +171,20 @@ interface JsonTestCaseReport {
   readonly result: CaseResult;
 }
 
-/** The shape `renderTestJson` emits. */
+/**
+ * The shape `renderTestJson` emits.
+ *
+ * @remarks
+ * `reportVersion` is versioned independently of `explain`'s own
+ * `JsonExplainReport` (`report/json.ts`) — both currently claim
+ * `reportVersion: "1"` for their own, different shapes. `reportType`
+ * disambiguates the two: `schema/report.schema.json`, the one shipped schema
+ * so far, pins its `reportType` to `"explain"` and would reject this shape,
+ * which is deliberate — this shape has no schema of its own yet.
+ */
 export interface JsonTestReport {
   readonly reportVersion: "1";
+  readonly reportType: "test";
   readonly header: {
     readonly claudeVersion: string;
     readonly specRange: string;
@@ -187,6 +198,7 @@ export interface JsonTestReport {
 export function toJsonTestReport(report: TestReport): JsonTestReport {
   return {
     reportVersion: "1",
+    reportType: "test",
     header: {
       claudeVersion: report.header.claudeVersion,
       specRange: report.header.specRange,

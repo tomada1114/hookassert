@@ -117,6 +117,9 @@ function makeDeps(overrides: Partial<ExecDeps> = {}): ExecDeps {
       overrides.hookassertDefaultTimeoutMs ?? HOOKASSERT_DEFAULT_TIMEOUT_MS,
     specDefaultTimeoutMs:
       overrides.specDefaultTimeoutMs ?? REAL_SPEC.defaults.hookTimeoutMs,
+    ...(overrides.explicitDefaultTimeoutMs === undefined
+      ? {}
+      : { explicitDefaultTimeoutMs: overrides.explicitDefaultTimeoutMs }),
   };
 }
 
@@ -361,6 +364,26 @@ describe("timeout", () => {
     });
     await executeHooks(deps, makePlan([makeStep(hook)]));
     expect(spawner.calls[0]?.timeoutMs).toBe(10_000);
+  });
+
+  it("explicitDefaultTimeoutMs overrides the computed default and is not clamped by specDefaultTimeoutMs", async () => {
+    const spawner = new CountingSpawner();
+    const hook = makeHook({
+      command: "echo hi",
+      args: undefined,
+      timeoutMs: undefined,
+    });
+    const deps = makeDeps({
+      spawner,
+      hookassertDefaultTimeoutMs: HOOKASSERT_DEFAULT_TIMEOUT_MS,
+      specDefaultTimeoutMs: 600_000,
+      explicitDefaultTimeoutMs: 900_000,
+    });
+    await executeHooks(deps, makePlan([makeStep(hook)]));
+    // Above both HOOKASSERT_DEFAULT_TIMEOUT_MS and specDefaultTimeoutMs:
+    // resolveDefaultTimeoutMs's Math.min would have clamped it to 600_000,
+    // which is exactly what an explicit override must not be subject to.
+    expect(spawner.calls[0]?.timeoutMs).toBe(900_000);
   });
 
   it("a hook's own declared timeoutMs overrides the effective default", async () => {
