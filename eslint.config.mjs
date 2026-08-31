@@ -381,6 +381,7 @@ export default defineConfig([
       "tests/reporters.test.ts",
       "tests/fixture.test.ts",
       "tests/assert.test.ts",
+      "tests/test-cmd.test.ts",
     ],
     rules: {
       "no-restricted-imports": "off",

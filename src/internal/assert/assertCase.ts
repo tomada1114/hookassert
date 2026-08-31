@@ -38,8 +38,14 @@ function isEmptyExpectation(expect: FixtureExpectation): boolean {
 /**
  * Whether `caseData` exists only to configure a stub, with nothing declared
  * to assert against.
+ *
+ * @remarks
+ * Exported so `src/cli.ts` can keep such a case out of the spawn plan in the
+ * first place, using this exact predicate rather than a copy of it: a case
+ * this returns `true` for is one {@link assertCase} reports as `"skipped"`,
+ * and the two must never disagree about which those are.
  */
-function isStubOnly(caseData: FixtureCase): boolean {
+export function isStubOnly(caseData: FixtureCase): boolean {
   return (
     caseData.stub !== undefined &&
     Object.keys(caseData.stub).length > 0 &&

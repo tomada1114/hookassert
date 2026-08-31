@@ -5,11 +5,23 @@
   "description": "Schema for the `json` reporter's output (src/internal/report/json.ts): the fixed, versioned contract downstream CI tooling may parse directly.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["reportVersion", "header", "event", "target", "firing", "rejected"],
+  "required": [
+    "reportVersion",
+    "reportType",
+    "header",
+    "event",
+    "target",
+    "firing",
+    "rejected"
+  ],
   "properties": {
     "reportVersion": {
       "const": "1",
       "description": "Version of this report shape, independent of the package's own semver."
+    },
+    "reportType": {
+      "const": "explain",
+      "description": "Discriminates this shape from other hookassert JSON report shapes (for example `test`'s), which reuse `reportVersion: \"1\"` for their own, independently versioned shape."
     },
     "header": { "$ref": "#/$defs/header" },
     "event": { "type": "string", "minLength": 1 },

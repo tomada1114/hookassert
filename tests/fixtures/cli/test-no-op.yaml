@@ -1,0 +1,8 @@
+# A single case whose event has no hook configured in PROJECT_WITH_HOOKS_DIR's
+# settings.json at all — nothing fires, nothing is spawned, and the case
+# passes trivially, since no expectation is declared. Used only to prove
+# --format selects the right reporter for `test`, without needing a real
+# subprocess or the consent gate.
+cases:
+  - event: SessionEnd
+    expect: {}

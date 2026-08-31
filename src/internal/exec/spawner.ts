@@ -71,10 +71,10 @@ export interface Spawner {
  * requires a value but nothing has implemented the seam yet.
  *
  * @remarks
- * `src/cli.ts` wires this in as its default `Spawner` so `main()` has a
- * complete dependency graph to run against until `test`'s own composition
- * wires in a real `NodeSpawner`. Never reached by `explain` or `lint`, which
- * never call `spawn` at all.
+ * `src/cli.ts` used to wire this in as its default `Spawner`, before `test`
+ * had a composition of its own; the default is `NodeSpawner` now, and this
+ * survives for a caller that wants a `Spawner`-shaped value it can prove is
+ * never called — `tests/reporters.test.ts` injects it for exactly that.
  */
 export function createUnimplementedSpawner(): Spawner {
   return {

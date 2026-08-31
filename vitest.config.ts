@@ -30,6 +30,7 @@ const automationTests = [
   "tests/sync-agents.test.ts",
   "tests/sync-labels.test.ts",
   "tests/tarball.test.ts",
+  "tests/test-cmd.test.ts",
   "tests/tooling-ignores.test.ts",
   "tests/verify-bootstrap.test.ts",
   "tests/verify-package.test.ts",

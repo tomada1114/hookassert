@@ -234,6 +234,25 @@ export interface ExecDeps {
 
   /** The loaded spec's own `defaults.hookTimeoutMs`. */
   readonly specDefaultTimeoutMs: number;
+
+  /**
+   * A default timeout the caller declared explicitly (`test`'s own
+   * `--timeout <ms>`), rather than one hookassert computed on its own.
+   *
+   * @remarks
+   * When present, this is the default {@link buildSpawnRequest} uses for a
+   * hook that declares no `timeoutMs` of its own — bypassing
+   * {@link resolveDefaultTimeoutMs}'s ceiling against `specDefaultTimeoutMs`
+   * entirely, the same exemption a hook's own declared `timeoutMs` already
+   * gets (see `buildSpawnRequest`'s own remark). A value the user typed on
+   * the command line is at least as explicit as one written into a hook's
+   * `settings.json` entry: hookassert's ceiling exists to bound the case
+   * where nobody said how long is acceptable, not to second-guess a duration
+   * the user actually asked for. `undefined` when `--timeout` was not given,
+   * in which case the computed default is still `min(hookassert's default,
+   * spec.defaults.hookTimeoutMs)`, unchanged.
+   */
+  readonly explicitDefaultTimeoutMs?: number;
 }
 
 /**
@@ -280,10 +299,9 @@ function buildSpawnRequest(
 ): SpawnRequest {
   const { hook } = step;
   const form: SpawnRequest["form"] = hook.args === undefined ? "shell" : "exec";
-  const defaultTimeoutMs = resolveDefaultTimeoutMs(
-    deps.hookassertDefaultTimeoutMs,
-    deps.specDefaultTimeoutMs,
-  );
+  const defaultTimeoutMs =
+    deps.explicitDefaultTimeoutMs ??
+    resolveDefaultTimeoutMs(deps.hookassertDefaultTimeoutMs, deps.specDefaultTimeoutMs);
 
   return {
     form,
