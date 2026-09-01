@@ -9,7 +9,11 @@ import {
   LINT_RULES,
   readMatcherGroups,
 } from "../src/internal/lint/index.js";
-import type { LintContext, LintRule } from "../src/internal/lint/index.js";
+import type {
+  LintContext,
+  LintHookCommand,
+  LintRule,
+} from "../src/internal/lint/index.js";
 import type { VersionContext } from "../src/internal/matcher/index.js";
 import {
   buildReportHeader,
@@ -107,7 +111,43 @@ function ruleById(id: string): LintRule {
   return rule;
 }
 
-/** The five matcher rules this issue ships, in `LINT_RULES`'s own order. */
+/**
+ * Build one `LintHookCommand` for a hand-constructed `LintContext`, the same
+ * way the file's other rule-specific `describe` blocks build a bespoke
+ * `LintMatcherGroup` inline. `file` defaults to a real committed fixture
+ * settings file (`command-not-found`'s own `clean.json`) rather than a
+ * synthetic path, so a relative `command`'s project-root resolution has a
+ * real, already-committed directory to resolve against without this file
+ * creating any filesystem state of its own — see `placing-tests`'s unit
+ * project rule this file stays inside.
+ */
+function hookCommand(overrides: Partial<LintHookCommand> = {}): LintHookCommand {
+  return {
+    file: ruleFixtureSource("command-not-found", "clean.json").path,
+    layer: "project",
+    event: "PreToolUse",
+    line: 1,
+    command: "./present.sh",
+    args: undefined,
+    ...overrides,
+  };
+}
+
+/** A `LintContext` carrying exactly `commands`, for the command/exit-code rules' own tests. */
+function commandContext(
+  commands: readonly LintHookCommand[],
+  pathEnv?: string,
+): LintContext {
+  return {
+    spec: REAL_SPEC,
+    versionContext: UNDETERMINED,
+    groups: [],
+    commands,
+    pathEnv,
+  };
+}
+
+/** The five matcher rules a prior issue ships, in `LINT_RULES`'s own order. */
 const RULE_IDS = [
   "matcher-is-array",
   "matcher-case",
@@ -117,9 +157,22 @@ const RULE_IDS = [
   "matcher-unanchored",
 ] as const;
 
+/** The six command/exit-code rules this issue ships, in `LINT_RULES`'s own order. */
+const COMMAND_RULE_IDS = [
+  "command-not-found",
+  "missing-shebang",
+  "not-executable",
+  "unquoted-var",
+  "exit-1-policy",
+  "exit-2-overrides-allow",
+] as const;
+
 describe("LINT_RULES: the registry", () => {
-  it("registers exactly the five matcher rules this issue ships", () => {
-    expect(LINT_RULES.map((rule) => rule.id)).toEqual(RULE_IDS);
+  it("registers exactly the five matcher rules and the six command/exit-code rules", () => {
+    expect(LINT_RULES.map((rule) => rule.id)).toEqual([
+      ...RULE_IDS,
+      ...COMMAND_RULE_IDS,
+    ]);
   });
 });
 
@@ -150,6 +203,34 @@ describe("every matcher rule", () => {
     const source = ruleFixtureSource(ruleId, "clean.json");
     expect(ruleById(ruleId).run(contextFor(source))).toEqual([]);
   });
+});
+
+describe("every command rule", () => {
+  it.each(COMMAND_RULE_IDS)(
+    "%s reports a Finding with file/line/ruleId/suggestion all set for its violating fixture",
+    (ruleId) => {
+      const source = ruleFixtureSource(ruleId, "violating.json");
+      const findings = ruleById(ruleId).run(contextFor(source));
+
+      expect(findings.length).toBeGreaterThan(0);
+      for (const finding of findings) {
+        expect(finding.ruleId).toBe(ruleId);
+        expect(finding.file).toBe(source.path);
+        expect(finding.line).toBeGreaterThan(0);
+        expect(finding.message.length).toBeGreaterThan(0);
+        expect(finding.suggestion.length).toBeGreaterThan(0);
+        expect(finding.suggestion).not.toBe(finding.message);
+      }
+    },
+  );
+
+  it.each(COMMAND_RULE_IDS)(
+    "%s reports zero findings for its clean fixture",
+    (ruleId) => {
+      const source = ruleFixtureSource(ruleId, "clean.json");
+      expect(ruleById(ruleId).run(contextFor(source))).toEqual([]);
+    },
+  );
 });
 
 describe("matcher-is-array", () => {
@@ -209,6 +290,8 @@ describe("matcher-case", () => {
           matcher: { kind: "string", value: "bash|Write" },
         },
       ],
+      commands: [],
+      pathEnv: undefined,
     };
     const [finding] = ruleById("matcher-case").run(ctx);
 
@@ -239,6 +322,8 @@ describe("matcher-dead", () => {
           matcher: { kind: "string", value: "mcp__github__create_issue" },
         },
       ],
+      commands: [],
+      pathEnv: undefined,
     };
     expect(ruleById("matcher-dead").run(ctx)).toEqual([]);
   });
@@ -281,6 +366,8 @@ describe("matcher-unanchored", () => {
           matcher: { kind: "string", value: "*" },
         },
       ],
+      commands: [],
+      pathEnv: undefined,
     };
     expect(rule.run(ctx)).toEqual([]);
   });
@@ -299,6 +386,8 @@ describe("matcher-unanchored", () => {
           matcher: { kind: "string", value: matcher },
         },
       ],
+      commands: [],
+      pathEnv: undefined,
     };
   }
 
@@ -381,6 +470,186 @@ describe.each([
 
     expect(finding).toBeDefined();
     expect(finding?.message).toContain("could not be determined");
+  });
+});
+
+describe("command-not-found", () => {
+  const rule = ruleById("command-not-found");
+
+  it("explains that the hook cannot start at all", () => {
+    const source = ruleFixtureSource("command-not-found", "violating.json");
+    const [finding] = rule.run(contextFor(source));
+
+    expect(finding?.message).toContain("does not resolve to an existing");
+    expect(finding?.message).toContain("cannot start at all");
+  });
+
+  it("checks an absolute path as-is: resolves against a real file, flags a missing one", () => {
+    const existing = hookCommand({ command: path.join(REPO_ROOT, "package.json") });
+    expect(rule.run(commandContext([existing]))).toEqual([]);
+
+    const missing = hookCommand({
+      command: path.join(REPO_ROOT, "definitely-does-not-exist.txt"),
+    });
+    expect(rule.run(commandContext([missing])).length).toBeGreaterThan(0);
+  });
+
+  it("resolves a relative command against the parent of an actual .claude directory", () => {
+    // command.file sits directly under a real `.claude/` directory (this
+    // repository's own), so the project root must resolve one level above
+    // it — to REPO_ROOT — not to `.claude/` itself. "./package.json" only
+    // exists relative to REPO_ROOT, so this only passes if that resolution
+    // is correct.
+    const command = hookCommand({
+      file: path.join(REPO_ROOT, ".claude", "settings.json"),
+      command: "./package.json",
+    });
+    expect(rule.run(commandContext([command]))).toEqual([]);
+  });
+
+  it("skips a leading NAME=value environment assignment when extracting the shell target", () => {
+    const command = hookCommand({ command: "FOO=bar ./present.sh" });
+    expect(rule.run(commandContext([command]))).toEqual([]);
+  });
+
+  it("looks up a bare command word on ctx.pathEnv, one directory at a time, never spawning it", () => {
+    const pathEnv = path.dirname(
+      ruleFixtureSource("command-not-found", "clean.json").path,
+    );
+    const found = hookCommand({ command: "present.sh" });
+    expect(rule.run(commandContext([found], pathEnv))).toEqual([]);
+
+    const notFound = hookCommand({ command: "no-such-tool-xyz" });
+    expect(rule.run(commandContext([notFound], pathEnv)).length).toBeGreaterThan(0);
+  });
+
+  it("never flags a resolved exec-form command, whose args are passed through as-is", () => {
+    const command = hookCommand({
+      command: path.join(REPO_ROOT, "package.json"),
+      args: [],
+    });
+    expect(rule.run(commandContext([command]))).toEqual([]);
+  });
+});
+
+describe("missing-shebang", () => {
+  const rule = ruleById("missing-shebang");
+
+  it("names the resolved script path and explains the risk", () => {
+    const source = ruleFixtureSource("missing-shebang", "violating.json");
+    const [finding] = rule.run(contextFor(source));
+
+    expect(finding?.message).toContain('no "#!" shebang line');
+    expect(finding?.suggestion).toContain("#!");
+  });
+
+  it("never flags a command that command-not-found already owns (unresolvable)", () => {
+    const command = hookCommand({ command: "./does-not-exist-anywhere.sh" });
+    expect(rule.run(commandContext([command]))).toEqual([]);
+  });
+
+  it("never flags a resolved file whose extension is not script-like", () => {
+    const command = hookCommand({ command: path.join(REPO_ROOT, "package.json") });
+    expect(rule.run(commandContext([command]))).toEqual([]);
+  });
+});
+
+describe("not-executable", () => {
+  const rule = ruleById("not-executable");
+
+  it("names the resolved file path and explains the permission bit", () => {
+    const source = ruleFixtureSource("not-executable", "violating.json");
+    const [finding] = rule.run(contextFor(source));
+
+    expect(finding?.message).toContain("is not executable");
+    expect(finding?.suggestion).toContain("chmod +x");
+  });
+
+  it("never flags a command that command-not-found already owns (unresolvable)", () => {
+    const command = hookCommand({ command: "./does-not-exist-anywhere.sh" });
+    expect(rule.run(commandContext([command]))).toEqual([]);
+  });
+
+  it("never flags a resolved target that is a directory, not a regular file", () => {
+    const command = hookCommand({ command: REPO_ROOT, args: [] });
+    expect(rule.run(commandContext([command]))).toEqual([]);
+  });
+});
+
+describe("unquoted-var", () => {
+  const rule = ruleById("unquoted-var");
+
+  it("names the unquoted reference and explains word splitting / glob expansion", () => {
+    const source = ruleFixtureSource("unquoted-var", "violating.json");
+    const [finding] = rule.run(contextFor(source));
+
+    expect(finding?.message).toContain("$FILE");
+    expect(finding?.message).toContain("word splitting");
+    expect(finding?.suggestion).toContain('"$FILE"');
+  });
+
+  it("never flags an exec-form command, even with an unquoted-looking $VAR in its command string", () => {
+    const command = hookCommand({ command: "rm $FILE", args: [] });
+    expect(rule.run(commandContext([command]))).toEqual([]);
+  });
+
+  it("flags the braced ${VAR} form too", () => {
+    const command = hookCommand({ command: "rm ${FILE}" });
+    const [finding] = rule.run(commandContext([command]));
+    expect(finding?.message).toContain("${FILE}");
+  });
+
+  it("never flags a variable reference sitting inside single quotes", () => {
+    const command = hookCommand({ command: "echo '$FILE'" });
+    expect(rule.run(commandContext([command]))).toEqual([]);
+  });
+});
+
+describe("exit-1-policy", () => {
+  const rule = ruleById("exit-1-policy");
+
+  it("explains that only exit 2 blocks and the tool call proceeds anyway on exit 1", () => {
+    const source = ruleFixtureSource("exit-1-policy", "violating.json");
+    const [finding] = rule.run(contextFor(source));
+
+    expect(finding?.message).toContain("Only exit code 2 blocks");
+    expect(finding?.message).toContain("proceeds anyway");
+    expect(finding?.suggestion).toContain("exit 2");
+  });
+
+  it("never flags a plain 'exit 1' with no conditional logic around it", () => {
+    const command = hookCommand({ command: "echo denied; exit 1" });
+    expect(rule.run(commandContext([command]))).toEqual([]);
+  });
+
+  it("never flags a policy branch that already exits 2", () => {
+    const source = ruleFixtureSource("exit-1-policy", "clean.json");
+    expect(rule.run(contextFor(source))).toEqual([]);
+  });
+});
+
+describe("exit-2-overrides-allow", () => {
+  const rule = ruleById("exit-2-overrides-allow");
+
+  it("states that exit 2 wins over the allow JSON payload", () => {
+    const source = ruleFixtureSource("exit-2-overrides-allow", "violating.json");
+    const [finding] = rule.run(contextFor(source));
+
+    expect(finding?.message).toContain("exit 2");
+    expect(finding?.message).toContain("override");
+    expect(finding?.message).toContain('"allow"');
+  });
+
+  it("also recognizes the nested hookSpecificOutput.permissionDecision allow shape", () => {
+    const command = hookCommand({
+      command: 'echo \'{"hookSpecificOutput":{"permissionDecision":"allow"}}\'; exit 2',
+    });
+    expect(rule.run(commandContext([command])).length).toBeGreaterThan(0);
+  });
+
+  it("never flags an allow decision with no exit 2 anywhere", () => {
+    const command = hookCommand({ command: 'echo \'{"decision":"allow"}\'; exit 0' });
+    expect(rule.run(commandContext([command]))).toEqual([]);
   });
 });
 
