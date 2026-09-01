@@ -43,36 +43,18 @@ export const HOOKASSERT_DEFAULT_TIMEOUT_MS = 10_000;
  * `test` runs the user's own hooks on the user's own machine; the concrete
  * failure this bounds is `Promise.all`-ing every step of a real
  * `ExecutionPlan` at once, which for a fixture set with many cases against a
- * settings tree with several hooks per event reaches a few hundred
- * simultaneous `detached` children, each holding three pipes — enough to hit
- * `EAGAIN`/`EMFILE` on the spawner itself (reported by `NodeSpawner` as
- * `exitCode: -1`, indistinguishable from a real hook failure) well before a
- * few hundred processes is unusual.
+ * settings tree with several hooks per event can reach hundreds of
+ * simultaneous children, enough to hit `EAGAIN`/`EMFILE` on the spawner
+ * itself.
  *
- * `8` was chosen from two measurements taken on the machine this issue was
- * fixed on (`os.availableParallelism()` also reports `8` there), spawning
- * real child processes through `/bin/sh -c` and `node -e` at caps
- * `1/4/8/16/32/unbounded`:
- *
- * - **I/O-bound** (200 steps, each `sh -c "sleep 0.02"`): cap `1` took
- *   ~7044ms; cap `8` took ~939ms (a 7.5x speedup over serial); caps `16`/`32`
- *   kept improving but only to ~601ms/~569ms — real but sharply diminishing
- *   returns past `8`.
- * - **CPU-bound** (64 steps, each a fresh `node -e` doing real work): cap `8`
- *   was the fastest point measured (~1576ms); caps `16`/`32` were *slower*
- *   (~1826ms/~1791ms) than `8`, from context-switching more processes than
- *   the machine has cores for.
- *
- * `8` sits at the CPU-bound optimum and already captures the large majority
- * of the I/O-bound benefit, without the unbounded case's fd/process-table
- * exposure. It is a fixed constant rather than a dynamic
- * `os.availableParallelism()` read: hook processes are typically
- * I/O-bound rather than CPU-bound (per the CPU-bound measurement above,
- * `availableParallelism()` would actually be the *worse* choice for that
- * workload), and a fixed default keeps a run's behavior independent of the
- * machine it happens to run on. {@link ExecDeps.concurrency} overrides this
- * per run; wiring a `--concurrency` flag to it is a CLI-surface addition left
- * for a future change.
+ * `8` is a fixed constant rather than a dynamic `os.availableParallelism()`
+ * read, measured with real child processes: it is the CPU-bound optimum
+ * (more workers than cores slows a CPU-bound run down from context
+ * switching), and I/O-bound throughput keeps improving past `8` only with
+ * sharply diminishing returns. A fixed default also keeps a run's behavior
+ * independent of the machine it happens to run on. {@link ExecDeps.concurrency}
+ * overrides this per run; wiring a `--concurrency` flag to it is a
+ * CLI-surface addition left for a future change.
  */
 export const HOOKASSERT_DEFAULT_CONCURRENCY = 8;
 
@@ -297,8 +279,8 @@ export interface ExecDeps {
   /**
    * Maximum number of steps {@link executeHooks} runs at once. Omit to use
    * {@link HOOKASSERT_DEFAULT_CONCURRENCY}; see its remark for how that
-   * default was chosen. A value below `1` is treated as `1` rather than
-   * deadlocking a plan that has steps to run.
+   * default was chosen. When given, must be an integer `>= 1`; `executeHooks`
+   * throws a `RangeError` otherwise rather than silently coercing it.
    */
   readonly concurrency?: number;
 }
@@ -399,11 +381,7 @@ async function runStep(
  * it finishes its current one. `items.entries()` — rather than an indexed
  * `items[i]` loop — is what lets multiple workers share one iterator safely:
  * each `for...of` step calls the shared iterator's `next()` synchronously, so
- * two workers can never race onto the same index, and `noUncheckedIndexedAccess`
- * never comes into play since nothing here indexes the array directly.
- * `results` is written through a local `(R | undefined)[]`, then asserted to
- * `R[]` only after every worker has returned — at that point every index in
- * `[0, items.length)` was visited exactly once by exactly one worker.
+ * two workers can never race onto the same index.
  */
 async function runWithConcurrencyLimit<T, R>(
   items: readonly T[],
@@ -453,11 +431,24 @@ async function runWithConcurrencyLimit<T, R>(
  * preserves `relevant`'s order in its result regardless of which worker
  * happened to finish which item first, so this pairing survives the cap the
  * same way it survived the previous unbounded `Promise.all`.
+ *
+ * @throws {RangeError} `deps.concurrency` is given but is not an integer
+ * `>= 1` — a value such as `0`, a fraction, or `NaN` is rejected here rather
+ * than silently clamped, since a clamp that turns `NaN` into `0` workers
+ * would resolve with no hook ever spawned.
  */
 export async function executeHooks(
   deps: ExecDeps,
   plan: ExecutionPlan,
 ): Promise<readonly ExecutionResult[]> {
+  if (
+    deps.concurrency !== undefined &&
+    !(Number.isInteger(deps.concurrency) && deps.concurrency >= 1)
+  ) {
+    throw new RangeError(
+      `ExecDeps.concurrency must be an integer >= 1, got ${String(deps.concurrency)}.`,
+    );
+  }
   const env = envForDeps(deps);
   const relevant = plan.steps.filter((step) => plan.assertedEvents.has(step.event));
   const concurrency = deps.concurrency ?? HOOKASSERT_DEFAULT_CONCURRENCY;
