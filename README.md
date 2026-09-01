@@ -36,7 +36,20 @@ hookassert --help
   version that cannot be confirmed to support it. Exits `1` when it finds anything, `0`
   when it finds nothing. `--claude-version`, `--settings` and `--format`
   (`pretty`/`json`/`github`) mean exactly what they do for `explain`.
-- `hookassert record` captures real hook payloads from a Claude Code session.
+- `hookassert record` inserts a side-effect-free capture hook into
+  `.claude/settings.local.json` — the smallest-blast-radius settings layer, per-user and
+  typically gitignored — for every event Claude Code documents (or only the ones named
+  by a comma-separated `--events <list>`), so a real session accumulates real hook
+  payloads. Each captured payload is written as its own envelope file (`capturedAt`,
+  `event`, `claudeVersion`, `sourceFile`, plus the raw payload) under
+  `.hookassert/captures/`, overridable with `--capture-dir <dir>`. It never spawns a
+  process itself — only the capture hook runs later, under Claude Code.
+  `hookassert record --stop` removes the capture hook again with a byte-for-byte restore
+  guarantee: if nothing else touched the settings file while recording was active, it is
+  restored exactly; if it was edited by hand in the meantime, only the capture hook is
+  removed — your edit is never silently overwritten — and the command exits `5` with
+  `ERR_RECORD_RESTORE` to say so. `--stop` also exits `5` with the same code when no
+  recording session is active.
 - `hookassert test <fixture>...` replays one or more fixture files against your merged
   settings, runs the hooks that actually fire, and asserts what happened against each
   case's declared `expect`. It is the one command that spawns processes, so it asks for
@@ -52,9 +65,6 @@ hookassert --help
   here, only a name. Exits `0` when every case passes (and, with `--ci`, none is
   `unknown` either), `1` when at least one fails, and `3` when there are no failures but
   `--ci` was given and at least one case is `unknown`.
-
-`record` alone has no behavior yet: it currently exits `4` with `ERR_USAGE`, so a script
-that wires it up fails loudly instead of silently reporting success.
 
 ## API
 

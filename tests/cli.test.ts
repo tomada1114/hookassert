@@ -1,7 +1,16 @@
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { isMain, main, runCli, type CliDeps } from "../src/cli.js";
 import { createUnimplementedSpawner } from "../src/internal/exec/spawner.js";
@@ -72,11 +81,8 @@ function explainDefaultSpecPath(): string {
   );
 }
 
-/** The commands hookassert will ship, in the order the usage text lists them. */
+/** The commands hookassert ships, in the order the usage text lists them. */
 const SUBCOMMANDS = ["explain", "lint", "record", "test"] as const;
-
-/** The commands with no behavior yet — `explain`, `lint`, and `test` are all real now. */
-const STUB_SUBCOMMANDS = ["record"] as const;
 
 /** The `ERR_` shape AGENTS.md fixes for every published error code. */
 const ERROR_CODE = /^ERR_[A-Z0-9_]+$/;
@@ -145,18 +151,6 @@ describe("runCli dispatch", () => {
     expect(result.exitCode).toBe(4);
     expect(result.stderr).toContain('unknown command "--json"');
   });
-
-  it.each(STUB_SUBCOMMANDS)(
-    "exits 4 with a not-yet-implemented message for %s",
-    async (name) => {
-      const result = await runCli([name], "my-tool");
-      expect(result.exitCode).toBe(4);
-      expect(result.stdout).toBe("");
-      expect(firstLine(result.stderr)).toBe(
-        `my-tool: ERR_USAGE: the "${name}" command is not implemented yet.`,
-      );
-    },
-  );
 
   it("points at the help flag on every usage error", async () => {
     expect((await runCli(["frobnicate"], "my-tool")).stderr).toContain(
@@ -710,6 +704,210 @@ describe("runCli lint", () => {
 
     expect(result.exitCode).toBe(1);
     expect(spawner.calls).toHaveLength(0);
+  });
+});
+
+describe("runCli record", () => {
+  const tempDirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  /** A fresh, writable project directory: `record` edits `.claude/` and
+   * `.hookassert/` in place, so it must never run against FIXTURES_DIR. */
+  function makeProjectDir(): string {
+    const dir = mkdtempSync(path.join(tmpdir(), "hookassert-cli-record-"));
+    tempDirs.push(dir);
+    return dir;
+  }
+
+  it("performs exactly zero spawns", async () => {
+    const spawner = new CountingSpawner();
+    const cwd = makeProjectDir();
+    const result = await runCli(
+      ["record"],
+      "hookassert",
+      explainDeps({ cwd, spawner }),
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(spawner.calls).toHaveLength(0);
+  });
+
+  it("inserts the capture hook and reports where it went, at exit 0", async () => {
+    const cwd = makeProjectDir();
+    const result = await runCli(["record"], "hookassert", explainDeps({ cwd }));
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+    const settingsFile = path.join(cwd, ".claude", "settings.local.json");
+    expect(result.stdout).toContain(settingsFile);
+    expect(existsSync(path.join(cwd, ".hookassert", "capture-hook.cjs"))).toBe(true);
+    expect(existsSync(settingsFile)).toBe(true);
+  });
+
+  it("--events restricts capture to the named events", async () => {
+    const cwd = makeProjectDir();
+    const result = await runCli(
+      ["record", "--events", "PreToolUse,Stop"],
+      "hookassert",
+      explainDeps({ cwd }),
+    );
+
+    expect(result.exitCode).toBe(0);
+    const settingsText = readFileSync(
+      path.join(cwd, ".claude", "settings.local.json"),
+      "utf8",
+    );
+    const parsed = JSON.parse(settingsText) as { hooks: Record<string, unknown> };
+    expect(Object.keys(parsed.hooks).sort()).toEqual(["PreToolUse", "Stop"]);
+  });
+
+  it("dedupes a repeated event in --events instead of inserting two matcher groups", async () => {
+    const cwd = makeProjectDir();
+    const result = await runCli(
+      ["record", "--events", "PreToolUse,PreToolUse"],
+      "hookassert",
+      explainDeps({ cwd }),
+    );
+
+    expect(result.exitCode).toBe(0);
+    const settingsText = readFileSync(
+      path.join(cwd, ".claude", "settings.local.json"),
+      "utf8",
+    );
+    const parsed = JSON.parse(settingsText) as {
+      hooks: { PreToolUse: unknown[] };
+    };
+    expect(parsed.hooks.PreToolUse).toHaveLength(1);
+  });
+
+  it("exits 4 with ERR_USAGE for an unrecognized event in --events", async () => {
+    const cwd = makeProjectDir();
+    const result = await runCli(
+      ["record", "--events", "NotAnEvent"],
+      "hookassert",
+      explainDeps({ cwd }),
+    );
+
+    expect(result.exitCode).toBe(4);
+    expect(result.stderr).toContain("ERR_USAGE");
+    expect(result.stderr).toContain("NotAnEvent");
+  });
+
+  it("honors --capture-dir", async () => {
+    const cwd = makeProjectDir();
+    const result = await runCli(
+      ["record", "--capture-dir", "custom-captures"],
+      "hookassert",
+      explainDeps({ cwd }),
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain(path.join(cwd, "custom-captures"));
+  });
+
+  it("exits 4 with ERR_USAGE for an invalid --claude-version", async () => {
+    const cwd = makeProjectDir();
+    const result = await runCli(
+      ["record", "--claude-version", "not-a-version"],
+      "hookassert",
+      explainDeps({ cwd }),
+    );
+
+    expect(result.exitCode).toBe(4);
+    expect(result.stderr).toContain("ERR_USAGE");
+  });
+
+  it("bakes HOOKASSERT_CLAUDE_VERSION into the capture script when --claude-version is absent", async () => {
+    const cwd = makeProjectDir();
+    const result = await runCli(
+      ["record"],
+      "hookassert",
+      explainDeps({ cwd, env: { HOOKASSERT_CLAUDE_VERSION: "2.1.300" } }),
+    );
+
+    expect(result.exitCode).toBe(0);
+    const scriptText = readFileSync(
+      path.join(cwd, ".hookassert", "capture-hook.cjs"),
+      "utf8",
+    );
+    expect(scriptText).toContain('BAKED_CLAUDE_VERSION = "2.1.300"');
+  });
+
+  it("record then record --stop performs exactly zero spawns and restores the file (zero diff)", async () => {
+    const cwd = makeProjectDir();
+    const spawner = new CountingSpawner();
+    mkdirSync(path.join(cwd, ".claude"), { recursive: true });
+    const settingsFile = path.join(cwd, ".claude", "settings.local.json");
+    const original = '{\n  "permissions": {\n    "allow": []\n  }\n}\n';
+    writeFileSync(settingsFile, original, "utf8");
+
+    const started = await runCli(
+      ["record"],
+      "hookassert",
+      explainDeps({ cwd, spawner }),
+    );
+    expect(started.exitCode).toBe(0);
+
+    const stopped = await runCli(
+      ["record", "--stop"],
+      "hookassert",
+      explainDeps({ cwd, spawner }),
+    );
+    expect(stopped.exitCode).toBe(0);
+    expect(stopped.stderr).toBe("");
+    expect(stopped.stdout).toContain("zero diff");
+    expect(readFileSync(settingsFile, "utf8")).toBe(original);
+    expect(spawner.calls).toHaveLength(0);
+  });
+
+  it("record --stop with no active session exits 5 with ERR_RECORD_NO_SESSION", async () => {
+    const cwd = makeProjectDir();
+    const result = await runCli(
+      ["record", "--stop"],
+      "hookassert",
+      explainDeps({ cwd }),
+    );
+
+    expect(result.exitCode).toBe(5);
+    expect(result.stderr).toContain("ERR_RECORD_NO_SESSION");
+  });
+
+  it("exits 4 with ERR_USAGE when --stop is combined with another option", async () => {
+    const cwd = makeProjectDir();
+    const result = await runCli(
+      ["record", "--stop", "--events", "PreToolUse"],
+      "hookassert",
+      explainDeps({ cwd }),
+    );
+
+    expect(result.exitCode).toBe(4);
+    expect(result.stderr).toContain("ERR_USAGE");
+  });
+
+  it("exits 4 with ERR_USAGE when a second session is started without stopping the first", async () => {
+    const cwd = makeProjectDir();
+    await runCli(["record"], "hookassert", explainDeps({ cwd }));
+    const result = await runCli(["record"], "hookassert", explainDeps({ cwd }));
+
+    expect(result.exitCode).toBe(4);
+    expect(result.stderr).toContain("ERR_USAGE");
+  });
+
+  it("exits 4 with ERR_USAGE on a positional argument", async () => {
+    const cwd = makeProjectDir();
+    const result = await runCli(
+      ["record", "stray"],
+      "hookassert",
+      explainDeps({ cwd }),
+    );
+
+    expect(result.exitCode).toBe(4);
+    expect(result.stderr).toContain("stray");
   });
 });
 
