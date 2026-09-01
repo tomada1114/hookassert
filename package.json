@@ -71,6 +71,7 @@
     "agents:check": "node scripts/sync-agents.mjs --check",
     "repo:labels": "node scripts/sync-labels.mjs",
     "check:staged": "node scripts/check-staged.mjs",
+    "conformance": "node scripts/conformance.mjs",
     "check:quick": "pnpm run format:check && pnpm run lint && pnpm run typecheck && pnpm run test",
     "check:source": "pnpm run format:check && pnpm run lint && pnpm run typecheck && pnpm run test:coverage && pnpm run build && pnpm run docs:build",
     "check": "pnpm run check:source && node scripts/clean.mjs .package && pnpm pack --pack-destination .package && pnpm run package:verify -- --pack-dir .package && node scripts/clean.mjs .package",

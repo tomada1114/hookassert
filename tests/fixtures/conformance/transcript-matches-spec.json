@@ -1,0 +1,415 @@
+{
+  "claudeVersion": "2.1.255",
+  "note": "Hand-constructed from spec/claude-code-2.1.251-2.2.0.json's matcherTable (issue #17), standing in for a normalized extraction of a real `claude --debug` transcript. See docs/conformance/README.md for the format and how a maintainer produces a real one.",
+  "firingObservations": [
+    {
+      "event": "PreToolUse",
+      "matcher": "Bash",
+      "tool": "Bash",
+      "fired": true
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "Bash",
+      "tool": "PowerShell",
+      "fired": false
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "Edit|Write",
+      "tool": "Edit",
+      "fired": true
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "Edit|Write",
+      "tool": "Write",
+      "fired": true
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "Edit|Write",
+      "tool": "NotebookEdit",
+      "fired": false
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "Edit, Write",
+      "tool": "Edit",
+      "fired": true
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "Edit, Write",
+      "tool": "Write",
+      "fired": true
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "Edit, Write",
+      "tool": "Read",
+      "fired": false
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "^Notebook",
+      "tool": "NotebookEdit",
+      "fired": true
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "^Notebook",
+      "tool": "Edit",
+      "fired": false
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "^Edit$",
+      "tool": "Edit",
+      "fired": true
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "^Edit$",
+      "tool": "NotebookEdit",
+      "fired": false
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "mcp__memory__.*",
+      "tool": "mcp__memory__create_entities",
+      "fired": true
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "mcp__memory__.*",
+      "tool": "mcp__filesystem__read_file",
+      "fired": false
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "mcp__brave-search__.*",
+      "tool": "mcp__brave-search__web_search",
+      "fired": true
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "mcp__brave-search__.*",
+      "tool": "mcp__memory__create_entities",
+      "fired": false
+    },
+    {
+      "event": "PostToolUse",
+      "matcher": "Edit|Write",
+      "tool": "Edit",
+      "fired": true
+    },
+    {
+      "event": "PostToolUse",
+      "matcher": "Edit|Write",
+      "tool": "Write",
+      "fired": true
+    },
+    {
+      "event": "PostToolUse",
+      "matcher": "Edit|Write",
+      "tool": "Bash",
+      "fired": false
+    },
+    {
+      "event": "PermissionRequest",
+      "matcher": "Bash",
+      "tool": "Bash",
+      "fired": true
+    },
+    {
+      "event": "PermissionRequest",
+      "matcher": "Bash",
+      "tool": "Edit",
+      "fired": false
+    },
+    {
+      "event": "PermissionDenied",
+      "matcher": "Bash",
+      "tool": "Bash",
+      "fired": true
+    },
+    {
+      "event": "PermissionDenied",
+      "matcher": "Bash",
+      "tool": "Edit",
+      "fired": false
+    },
+    {
+      "event": "SessionStart",
+      "matcher": "startup",
+      "tool": "startup",
+      "fired": true
+    },
+    {
+      "event": "SessionStart",
+      "matcher": "startup",
+      "tool": "resume",
+      "fired": false
+    },
+    {
+      "event": "Setup",
+      "matcher": "init",
+      "tool": "init",
+      "fired": true
+    },
+    {
+      "event": "Setup",
+      "matcher": "init",
+      "tool": "maintenance",
+      "fired": false
+    },
+    {
+      "event": "SessionEnd",
+      "matcher": "clear",
+      "tool": "clear",
+      "fired": true
+    },
+    {
+      "event": "SessionEnd",
+      "matcher": "clear",
+      "tool": "resume",
+      "fired": false
+    },
+    {
+      "event": "Notification",
+      "matcher": "permission_prompt",
+      "tool": "permission_prompt",
+      "fired": true
+    },
+    {
+      "event": "Notification",
+      "matcher": "permission_prompt",
+      "tool": "idle_prompt",
+      "fired": false
+    },
+    {
+      "event": "SubagentStart",
+      "matcher": "Explore",
+      "tool": "Explore",
+      "fired": true
+    },
+    {
+      "event": "SubagentStart",
+      "matcher": "Explore",
+      "tool": "Plan",
+      "fired": false
+    },
+    {
+      "event": "SubagentStart",
+      "matcher": "^my-plugin:reviewer$",
+      "tool": "my-plugin:reviewer",
+      "fired": true
+    },
+    {
+      "event": "SubagentStart",
+      "matcher": "^my-plugin:reviewer$",
+      "tool": "reviewer",
+      "fired": false
+    },
+    {
+      "event": "SubagentStop",
+      "matcher": "Explore",
+      "tool": "Explore",
+      "fired": true
+    },
+    {
+      "event": "SubagentStop",
+      "matcher": "Explore",
+      "tool": "Plan",
+      "fired": false
+    },
+    {
+      "event": "ConfigChange",
+      "matcher": "skills",
+      "tool": "skills",
+      "fired": true
+    },
+    {
+      "event": "ConfigChange",
+      "matcher": "skills",
+      "tool": "policy_settings",
+      "fired": false
+    },
+    {
+      "event": "DirectoryAdded",
+      "matcher": "slash_command",
+      "tool": "slash_command",
+      "fired": true
+    },
+    {
+      "event": "DirectoryAdded",
+      "matcher": "slash_command",
+      "tool": "register_repo_root",
+      "fired": false
+    },
+    {
+      "event": "FileChanged",
+      "matcher": ".envrc|.env",
+      "tool": ".envrc",
+      "fired": true
+    },
+    {
+      "event": "FileChanged",
+      "matcher": ".envrc|.env",
+      "tool": ".env",
+      "fired": true
+    },
+    {
+      "event": "FileChanged",
+      "matcher": ".envrc|.env",
+      "tool": "data.csv",
+      "fired": false
+    },
+    {
+      "event": "StopFailure",
+      "matcher": "rate_limit",
+      "tool": "rate_limit",
+      "fired": true
+    },
+    {
+      "event": "StopFailure",
+      "matcher": "rate_limit",
+      "tool": "overloaded",
+      "fired": false
+    },
+    {
+      "event": "InstructionsLoaded",
+      "matcher": "session_start",
+      "tool": "session_start",
+      "fired": true
+    },
+    {
+      "event": "InstructionsLoaded",
+      "matcher": "session_start",
+      "tool": "compact",
+      "fired": false
+    },
+    {
+      "event": "InstructionsLoaded",
+      "matcher": "path_glob_match|nested_traversal",
+      "tool": "path_glob_match",
+      "fired": true
+    },
+    {
+      "event": "InstructionsLoaded",
+      "matcher": "path_glob_match|nested_traversal",
+      "tool": "nested_traversal",
+      "fired": true
+    },
+    {
+      "event": "InstructionsLoaded",
+      "matcher": "path_glob_match|nested_traversal",
+      "tool": "include",
+      "fired": false
+    },
+    {
+      "event": "PreCompact",
+      "matcher": "manual",
+      "tool": "manual",
+      "fired": true
+    },
+    {
+      "event": "PreCompact",
+      "matcher": "manual",
+      "tool": "auto",
+      "fired": false
+    },
+    {
+      "event": "PostCompact",
+      "matcher": "auto",
+      "tool": "auto",
+      "fired": true
+    },
+    {
+      "event": "PostCompact",
+      "matcher": "auto",
+      "tool": "manual",
+      "fired": false
+    },
+    {
+      "event": "PreModelSwitch",
+      "matcher": "claude-opus-5",
+      "tool": "claude-opus-5",
+      "fired": true
+    },
+    {
+      "event": "PreModelSwitch",
+      "matcher": "claude-opus-5",
+      "tool": "claude-sonnet-5",
+      "fired": false
+    },
+    {
+      "event": "PreModelSwitch",
+      "matcher": ".*opus.*",
+      "tool": "claude-opus-5",
+      "fired": true
+    },
+    {
+      "event": "PreModelSwitch",
+      "matcher": ".*opus.*",
+      "tool": "claude-sonnet-5",
+      "fired": false
+    },
+    {
+      "event": "PostModelSwitch",
+      "matcher": "claude-opus-4-6|claude-opus-5",
+      "tool": "claude-opus-4-6",
+      "fired": true
+    },
+    {
+      "event": "PostModelSwitch",
+      "matcher": "claude-opus-4-6|claude-opus-5",
+      "tool": "claude-opus-5",
+      "fired": true
+    },
+    {
+      "event": "PostModelSwitch",
+      "matcher": "claude-opus-4-6|claude-opus-5",
+      "tool": "claude-sonnet-5",
+      "fired": false
+    },
+    {
+      "event": "UserPromptExpansion",
+      "matcher": "deploy",
+      "tool": "deploy",
+      "fired": true
+    },
+    {
+      "event": "UserPromptExpansion",
+      "matcher": "deploy",
+      "tool": "review",
+      "fired": false
+    },
+    {
+      "event": "Elicitation",
+      "matcher": "my-mcp-server",
+      "tool": "my-mcp-server",
+      "fired": true
+    },
+    {
+      "event": "Elicitation",
+      "matcher": "my-mcp-server",
+      "tool": "other-server",
+      "fired": false
+    },
+    {
+      "event": "ElicitationResult",
+      "matcher": "my-mcp-server",
+      "tool": "my-mcp-server",
+      "fired": true
+    },
+    {
+      "event": "ElicitationResult",
+      "matcher": "my-mcp-server",
+      "tool": "other-server",
+      "fired": false
+    }
+  ],
+  "payloadObservations": []
+}

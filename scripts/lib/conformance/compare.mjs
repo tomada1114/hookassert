@@ -1,0 +1,105 @@
+// The comparison engine: diffs hookassert's predicted firing set against a
+// transcript's observed firing set.
+//
+// Pure -- no I/O, no process, no write, for or against `spec/**` -- so it can
+// be exercised directly by tests/conformance.test.ts without a `claude`
+// binary or a built `dist/`. On a mismatch, `buildProposedDiff` only builds
+// text: applying a correction to `spec/claude-code-<range>.json` is a human
+// decision made in a reviewed pull request, never something this module (or
+// its caller, scripts/conformance.mjs) does on its own.
+
+/**
+ * @typedef {import("./predicted.mjs").FiringCase} FiringCase
+ */
+
+/**
+ * @typedef {object} FiringMismatch
+ * @property {string} event
+ * @property {string} matcher
+ * @property {string} tool
+ * @property {boolean} predictedFired
+ * @property {boolean} observedFired
+ * @property {string} proposedDiff - Human-readable proposed correction.
+ * Printed for review; never applied by this harness.
+ */
+
+/**
+ * @typedef {object} FiringComparison
+ * @property {readonly FiringCase[]} agreements - Cases where prediction and
+ * observation agree.
+ * @property {readonly FiringMismatch[]} mismatches - Cases where they disagree.
+ * @property {readonly FiringCase[]} unobserved - Predicted cases the
+ * transcript never recorded, so there was nothing to compare them against.
+ */
+
+/**
+ * @param {{event: string, matcher: string, tool: string}} entry
+ * @returns {string}
+ */
+function caseKey(entry) {
+  return `${entry.event} ${entry.matcher} ${entry.tool}`;
+}
+
+/**
+ * Build the proposed spec correction for one mismatch, as plain text. This
+ * function only builds text: it never opens, reads, or writes
+ * `spec/claude-code-<range>.json`.
+ *
+ * @param {FiringCase} predicted
+ * @param {FiringCase} observed
+ * @returns {string}
+ */
+export function buildProposedDiff(predicted, observed) {
+  const toList = observed.fired ? "matches" : "doesNotMatch";
+  return [
+    "# proposed spec correction -- for human review, not applied automatically",
+    `event: ${predicted.event}`,
+    `matcher: ${JSON.stringify(predicted.matcher)}`,
+    `hookassert predicted "${predicted.tool}" fired=${String(predicted.fired)}; ` +
+      `the transcript observed fired=${String(observed.fired)}.`,
+    `+ move "${predicted.tool}" to matcherTable[...].${toList}`,
+    `reason: the transcript observed fired=${String(observed.fired)}, ` +
+      `hookassert predicted fired=${String(predicted.fired)}.`,
+  ].join("\n");
+}
+
+/**
+ * Compare hookassert's predicted firing set against a transcript's observed
+ * firing set, matching cases by `(event, matcher, tool)`.
+ *
+ * @param {readonly FiringCase[]} predictedCases
+ * @param {readonly FiringCase[]} observedCases
+ * @returns {FiringComparison}
+ */
+export function compareFiringSets(predictedCases, observedCases) {
+  const observedByKey = new Map(observedCases.map((entry) => [caseKey(entry), entry]));
+
+  /** @type {FiringCase[]} */
+  const agreements = [];
+  /** @type {FiringMismatch[]} */
+  const mismatches = [];
+  /** @type {FiringCase[]} */
+  const unobserved = [];
+
+  for (const predicted of predictedCases) {
+    const observed = observedByKey.get(caseKey(predicted));
+    if (observed === undefined) {
+      unobserved.push(predicted);
+      continue;
+    }
+    if (observed.fired === predicted.fired) {
+      agreements.push(predicted);
+      continue;
+    }
+    mismatches.push({
+      event: predicted.event,
+      matcher: predicted.matcher,
+      tool: predicted.tool,
+      predictedFired: predicted.fired,
+      observedFired: observed.fired,
+      proposedDiff: buildProposedDiff(predicted, observed),
+    });
+  }
+
+  return { agreements, mismatches, unobserved };
+}

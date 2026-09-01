@@ -1,0 +1,8 @@
+{
+  "claudeVersion": "2.1.255",
+  "note": "A payloadObservations entry naming an event the real spec does not declare, for scripts/conformance.mjs's main() ERR_CONFORMANCE_UNKNOWN_EVENT path.",
+  "firingObservations": [
+    { "event": "PreToolUse", "matcher": "Bash", "tool": "Bash", "fired": true }
+  ],
+  "payloadObservations": [{ "event": "NotARealEvent", "payload": { "anything": true } }]
+}
