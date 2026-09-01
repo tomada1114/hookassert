@@ -1,0 +1,4 @@
+{
+  "claudeVersion": "2.1.255",
+  "note": "Deliberately missing the required firingObservations array, for transcript.mjs's shape-validation tests."
+}

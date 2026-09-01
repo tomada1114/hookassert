@@ -1,0 +1,9 @@
+{
+  "claudeVersion": "2.1.255",
+  "note": "A small fixture for scripts/conformance.mjs's own main() tests -- the second entry disagrees with an injected predictor that always answers fired=true.",
+  "firingObservations": [
+    { "event": "PreToolUse", "matcher": "Bash", "tool": "Bash", "fired": true },
+    { "event": "PreToolUse", "matcher": "Bash", "tool": "PowerShell", "fired": false }
+  ],
+  "payloadObservations": []
+}
