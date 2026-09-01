@@ -490,6 +490,31 @@ describe("runCli lint", () => {
     expect(result.stdout).toContain(LINT_VIOLATING_FIXTURE);
   });
 
+  it("accepts --ci and behaves identically to a plain run", async () => {
+    const plain = await runCli(["lint"], "hookassert", explainDeps());
+    const withCi = await runCli(["lint", "--ci"], "hookassert", explainDeps());
+
+    expect(withCi.exitCode).toBe(plain.exitCode);
+    expect(withCi.stdout).toBe(plain.stdout);
+    expect(withCi.stderr).toBe(plain.stderr);
+  });
+
+  it("accepts --ci alongside a violation the same way a plain run does", async () => {
+    const plain = await runCli(
+      ["lint", "--settings", LINT_VIOLATING_FIXTURE],
+      "hookassert",
+      explainDeps(),
+    );
+    const withCi = await runCli(
+      ["lint", "--ci", "--settings", LINT_VIOLATING_FIXTURE],
+      "hookassert",
+      explainDeps(),
+    );
+
+    expect(withCi.exitCode).toBe(plain.exitCode);
+    expect(withCi.stdout).toBe(plain.stdout);
+  });
+
   it("always prints the spec's declared claudeCodeRange", async () => {
     const result = await runCli(["lint"], "hookassert", explainDeps());
 

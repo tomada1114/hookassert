@@ -18,10 +18,16 @@
  * rather than being silently omitted, mirroring `#5`'s own version-gating
  * rule that an undetermined version never silently passes — the message
  * says the version could not be determined rather than naming a definite
- * failure, so a reader can tell the two apart.
+ * failure, so a reader can tell the two apart. A known version outside
+ * `spec.claudeCodeRange` degrades the same way — `classify.ts`'s own
+ * `isVersionKnownOutOfRange` treats such a version as unable to confirm
+ * *anything* about the spec it is checked against, not only the notation
+ * rules this module gates, so this mirrors that rather than trusting
+ * `meetsSinceVersion` on a version the loaded spec was never declared to
+ * describe.
  */
 
-import { meetsSinceVersion } from "../../spec/index.js";
+import { isInDeclaredRange, meetsSinceVersion } from "../../spec/index.js";
 import type { VersionContext } from "../../matcher/index.js";
 import type { Finding, LintContext, LintRule } from "../types.js";
 import { isExactListSyntax, isToolNameEvent } from "../shared.js";
@@ -91,8 +97,13 @@ export function createVersionNotationRule(
           continue;
         }
 
+        const isOutOfRange =
+          ctx.versionContext.kind === "known" &&
+          !isInDeclaredRange(ctx.spec, ctx.versionContext.version);
+
         if (
           ctx.versionContext.kind === "known" &&
+          !isOutOfRange &&
           meetsSinceVersion(ctx.versionContext.version, rule.sinceVersion)
         ) {
           // Fully supported on the version this run assumes — nothing to report.
@@ -100,7 +111,7 @@ export function createVersionNotationRule(
         }
 
         const message =
-          ctx.versionContext.kind === "undetermined"
+          ctx.versionContext.kind === "undetermined" || isOutOfRange
             ? `Matcher "${matcher}" uses ${notationLabel}, supported since Claude ` +
               `Code ${rule.sinceVersion}, but the running Claude Code version could ` +
               "not be determined — this notation might not be supported."

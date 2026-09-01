@@ -9,8 +9,9 @@
  */
 
 import { createVersionNotationRule } from "./versionNotationRule.js";
+import type { LintRule } from "../types.js";
 
-export const matcherHyphenVersionRule = createVersionNotationRule({
+export const matcherHyphenVersionRule: LintRule = createVersionNotationRule({
   ruleId: "matcher-hyphen-version",
   character: "-",
   matcherSyntaxRuleId: "hyphen-exact-match",

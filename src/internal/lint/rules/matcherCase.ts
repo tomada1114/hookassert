@@ -38,7 +38,13 @@ function findMismatches(
   return mismatches;
 }
 
+/** The delimiter `matcher` was split on — `"|"` when present, `","` otherwise (`splitListItems`'s own precedence). */
+function delimiterOf(matcher: string): string {
+  return matcher.includes("|") ? "|" : ",";
+}
+
 function correctedMatcher(
+  matcher: string,
   items: readonly string[],
   mismatches: readonly CaseMismatch[],
 ): string {
@@ -46,7 +52,7 @@ function correctedMatcher(
     .map(
       (item) => mismatches.find((mismatch) => mismatch.item === item)?.correct ?? item,
     )
-    .join(",");
+    .join(delimiterOf(matcher));
 }
 
 export const matcherCaseRule: LintRule = {
@@ -80,7 +86,7 @@ export const matcherCaseRule: LintRule = {
         message:
           `Matcher "${matcher}" uses the wrong case for ${names}. Matcher ` +
           "comparison is case-sensitive, so this never matches.",
-        suggestion: `Use "${correctedMatcher(items, mismatches)}" instead of "${matcher}".`,
+        suggestion: `Use "${correctedMatcher(matcher, items, mismatches)}" instead of "${matcher}".`,
       });
     }
     return findings;

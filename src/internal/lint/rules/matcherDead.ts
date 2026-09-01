@@ -14,6 +14,11 @@
  * classified as an unanchored regex is `matcher-unanchored`'s own concern —
  * a regex that matches no known tool at all is a narrower, harder-to-
  * characterize case this rule does not attempt.
+ *
+ * An item starting with `mcp__` is never reported: MCP tool names are
+ * project-specific and, by construction, never appear in `spec.knownTools`,
+ * so treating one as a typo would be a false positive on a perfectly valid
+ * matcher.
  */
 
 import type { Finding, LintContext, LintRule } from "../types.js";
@@ -41,7 +46,9 @@ export const matcherDeadRule: LintRule = {
       }
 
       const items = splitListItems(matcher);
-      const dead = items.filter((item) => !knownToolsLower.has(item.toLowerCase()));
+      const dead = items.filter(
+        (item) => !item.startsWith("mcp__") && !knownToolsLower.has(item.toLowerCase()),
+      );
       if (dead.length === 0) {
         continue;
       }
@@ -52,9 +59,8 @@ export const matcherDeadRule: LintRule = {
         line: group.line,
         ruleId: "matcher-dead",
         message:
-          `Matcher "${matcher}" includes ${names}, which matches none of the ` +
-          `known tools (${ctx.spec.knownTools.join(", ")}). This hook can ` +
-          `never fire for ${dead.length === 1 ? "it" : "these"}.`,
+          `Matcher "${matcher}" includes ${names}, which ${dead.length === 1 ? "is" : "are"} not ` +
+          `one of the tools the loaded spec knows (${ctx.spec.knownTools.join(", ")}).`,
         suggestion: `Check for a typo — did you mean one of: ${ctx.spec.knownTools.join(", ")}?`,
       });
     }

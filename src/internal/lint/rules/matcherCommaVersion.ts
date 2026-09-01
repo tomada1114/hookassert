@@ -6,8 +6,9 @@
  */
 
 import { createVersionNotationRule } from "./versionNotationRule.js";
+import type { LintRule } from "../types.js";
 
-export const matcherCommaVersionRule = createVersionNotationRule({
+export const matcherCommaVersionRule: LintRule = createVersionNotationRule({
   ruleId: "matcher-comma-version",
   character: ",",
   matcherSyntaxRuleId: "comma-separated-list",

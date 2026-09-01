@@ -33,6 +33,18 @@ const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
 const REAL_SPEC_PATH = path.join(REPO_ROOT, "spec", "claude-code-2.1.251-2.2.0.json");
 const REAL_SPEC: Spec = loadSpecFile(REAL_SPEC_PATH);
 
+/**
+ * The real spec's own `claudeCodeRange` (`">=2.1.251 <2.2.0"`) starts past
+ * both notation rules' `sinceVersion` (`2.1.191`, `2.1.195`), so a version
+ * below either — as `OLD_VERSION`, `COMMA_SATISFIED_VERSION` and
+ * `HYPHEN_SATISFIED_VERSION` below all are — is also outside the real
+ * spec's declared range. Widening the range here isolates the
+ * `sinceVersion` boundary these versions exist to test from the separate
+ * `spec.claudeCodeRange` check `OUT_OF_RANGE_VERSION` exists to test —
+ * mirrors `tests/matcher.test.ts`'s own `widenedSpec`.
+ */
+const WIDENED_RANGE_SPEC: Spec = { ...REAL_SPEC, claudeCodeRange: ">=2.1.0 <2.2.0" };
+
 const LINT_FIXTURES_DIR = fileURLToPath(new URL("./fixtures/lint/", import.meta.url));
 const SETTINGS_FIXTURES_DIR = fileURLToPath(
   new URL("./fixtures/settings/", import.meta.url),
@@ -58,6 +70,16 @@ const HYPHEN_SATISFIED_VERSION: VersionContext = {
   version: parseClaudeVersion("2.1.195"),
 };
 
+/**
+ * Known, and above both notation rules' own `sinceVersion`, but outside
+ * `REAL_SPEC.claudeCodeRange` (`">=2.1.251 <2.2.0"`) — the loaded spec
+ * cannot vouch for a version this far from what it describes.
+ */
+const OUT_OF_RANGE_VERSION: VersionContext = {
+  kind: "known",
+  version: parseClaudeVersion("3.0.0"),
+};
+
 function ruleFixtureSource(
   ruleId: string,
   file: "violating.json" | "clean.json",
@@ -72,8 +94,9 @@ function settingsFixtureSource(caseDir: string, file: string): SettingsSource {
 function contextFor(
   source: SettingsSource,
   versionContext: VersionContext = UNDETERMINED,
+  spec: Spec = REAL_SPEC,
 ): LintContext {
-  return buildLintContext([source], REAL_SPEC, versionContext);
+  return buildLintContext([source], spec, versionContext);
 }
 
 function ruleById(id: string): LintRule {
@@ -171,6 +194,27 @@ describe("matcher-case", () => {
     // The violating fixture declares `"matcher": "bash"`.
     expect(finding?.suggestion).toContain('"Bash"');
   });
+
+  it("preserves a pipe delimiter in its suggestion rather than switching to comma notation", () => {
+    const source = ruleFixtureSource("matcher-case", "violating.json");
+    const ctx: LintContext = {
+      spec: REAL_SPEC,
+      versionContext: UNDETERMINED,
+      groups: [
+        {
+          file: source.path,
+          layer: "project",
+          event: "PreToolUse",
+          line: 1,
+          matcher: { kind: "string", value: "bash|Write" },
+        },
+      ],
+    };
+    const [finding] = ruleById("matcher-case").run(ctx);
+
+    expect(finding?.suggestion).toContain('"Bash|Write"');
+    expect(finding?.suggestion).not.toContain('"Bash,Write"');
+  });
 });
 
 describe("matcher-dead", () => {
@@ -179,6 +223,24 @@ describe("matcher-dead", () => {
     const [finding] = ruleById("matcher-dead").run(contextFor(source));
 
     expect(finding?.message).toContain('"Basher"');
+  });
+
+  it("never flags an mcp__* item, which is never in spec.knownTools by construction", () => {
+    const source = ruleFixtureSource("matcher-dead", "violating.json");
+    const ctx: LintContext = {
+      spec: REAL_SPEC,
+      versionContext: UNDETERMINED,
+      groups: [
+        {
+          file: source.path,
+          layer: "project",
+          event: "PreToolUse",
+          line: 1,
+          matcher: { kind: "string", value: "mcp__github__create_issue" },
+        },
+      ],
+    };
+    expect(ruleById("matcher-dead").run(ctx)).toEqual([]);
   });
 });
 
@@ -222,6 +284,48 @@ describe("matcher-unanchored", () => {
     };
     expect(rule.run(ctx)).toEqual([]);
   });
+
+  function unanchoredCtx(matcher: string): LintContext {
+    const source = ruleFixtureSource("matcher-unanchored", "violating.json");
+    return {
+      spec: REAL_SPEC,
+      versionContext: UNDETERMINED,
+      groups: [
+        {
+          file: source.path,
+          layer: "project",
+          event: "PreToolUse",
+          line: 1,
+          matcher: { kind: "string", value: matcher },
+        },
+      ],
+    };
+  }
+
+  it("does not flag a correctly anchored alternation that matches only its own branches", () => {
+    expect(rule.run(unanchoredCtx("^(Bash|Edit)$"))).toEqual([]);
+  });
+
+  it("for an unanchored alternation, lists only the genuine over-match, not the alternation's own branches", () => {
+    const [finding] = rule.run(unanchoredCtx("(Edit|Write)"));
+
+    expect(finding?.message).toContain("NotebookEdit");
+    expect(finding?.message).not.toContain('"Edit"');
+    expect(finding?.message).not.toContain('"Write"');
+  });
+
+  it("suggests a non-capturing anchored wrap rather than doubling an existing trailing $", () => {
+    const [finding] = rule.run(unanchoredCtx("Edit$"));
+
+    expect(finding?.suggestion).toContain('"^(?:Edit)$"');
+    expect(finding?.suggestion).not.toContain("$$");
+  });
+
+  it("suggests a non-capturing anchored wrap rather than anchoring only the first alternation branch", () => {
+    const [finding] = rule.run(unanchoredCtx("Edit|Write.*"));
+
+    expect(finding?.suggestion).toContain('"^(?:Edit|Write.*)$"');
+  });
 });
 
 describe.each([
@@ -242,28 +346,41 @@ describe.each([
   const source = ruleFixtureSource(ruleId, "violating.json");
 
   it("emits no finding when the known version satisfies the notation rule's sinceVersion", () => {
-    expect(rule.run(contextFor(source, satisfiedVersion))).toEqual([]);
+    expect(rule.run(contextFor(source, satisfiedVersion, WIDENED_RANGE_SPEC))).toEqual(
+      [],
+    );
   });
 
   it("emits a finding naming the required and detected versions when the known version is older", () => {
-    const [finding] = rule.run(contextFor(source, OLD_VERSION));
+    const [finding] = rule.run(contextFor(source, OLD_VERSION, WIDENED_RANGE_SPEC));
 
     expect(finding?.message).toContain(sinceVersion);
     expect(finding?.message).toContain("2.1.100");
   });
 
   it("degrades to an unknown-confidence finding — rather than omitting it — when the version is undetermined", () => {
-    const [finding] = rule.run(contextFor(source, UNDETERMINED));
+    const [finding] = rule.run(contextFor(source, UNDETERMINED, WIDENED_RANGE_SPEC));
 
     expect(finding).toBeDefined();
     expect(finding?.message).toContain("could not be determined");
   });
 
   it("produces a message distinguishable from the definite-failure case", () => {
-    const [undeterminedFinding] = rule.run(contextFor(source, UNDETERMINED));
-    const [oldVersionFinding] = rule.run(contextFor(source, OLD_VERSION));
+    const [undeterminedFinding] = rule.run(
+      contextFor(source, UNDETERMINED, WIDENED_RANGE_SPEC),
+    );
+    const [oldVersionFinding] = rule.run(
+      contextFor(source, OLD_VERSION, WIDENED_RANGE_SPEC),
+    );
 
     expect(undeterminedFinding?.message).not.toBe(oldVersionFinding?.message);
+  });
+
+  it("degrades to the same unknown-confidence finding — rather than silently passing — when the known version is outside spec.claudeCodeRange", () => {
+    const [finding] = rule.run(contextFor(source, OUT_OF_RANGE_VERSION));
+
+    expect(finding).toBeDefined();
+    expect(finding?.message).toContain("could not be determined");
   });
 });
 

@@ -455,11 +455,15 @@ function runExplain(args: readonly string[], deps: CliDeps): CliResult {
   return { exitCode: 0, stdout, stderr: "" };
 }
 
-/** `lint`'s own option table: `common` only — `lint` has no `<event>`/`[tool]` positionals. */
+/**
+ * `lint`'s own option table: `common` plus `--ci`, accepted and ignored —
+ * `lint` has no `<event>`/`[tool]` positionals.
+ */
 const LINT_OPTIONS = {
   settings: { type: "string", multiple: true },
   "claude-version": { type: "string" },
   format: { type: "string" },
+  ci: { type: "boolean" },
   help: { type: "boolean", short: "h" },
 } as const;
 
