@@ -27,6 +27,7 @@ import {
   NodeVersionProbe,
   type ExecDeps,
   type ExecutionPlan,
+  type ExecutionResult,
   type ExecutionStep,
 } from "./internal/exec/index.js";
 import { NodeSpawner, type Spawner } from "./internal/exec/spawner.js";
@@ -1049,15 +1050,21 @@ async function runTest(args: readonly string[], deps: CliDeps): Promise<CliResul
     spawnWorthy,
   );
 
-  const executed = await Promise.all(
-    filePlans.map((plan) => {
-      const executionPlan: ExecutionPlan = {
-        steps: plan.steps,
-        assertedEvents: plan.assertedEvents,
-      };
-      return executeHooks(plan.execDeps, executionPlan);
-    }),
-  );
+  // Sequential, not `Promise.all`: each `executeHooks` call runs its own
+  // concurrency-capped worker pool (see `executor.ts`'s
+  // `HOOKASSERT_DEFAULT_CONCURRENCY`), so running the files in parallel here
+  // would let N fixture files spawn N independent pools at once — the exact
+  // fan-out issue #40 caps against. A `for…of` with `await` keeps at most one
+  // pool in flight per run while preserving the per-file result order the
+  // rest of `runTest` relies on.
+  const executed: (readonly ExecutionResult[])[] = [];
+  for (const plan of filePlans) {
+    const executionPlan: ExecutionPlan = {
+      steps: plan.steps,
+      assertedEvents: plan.assertedEvents,
+    };
+    executed.push(await executeHooks(plan.execDeps, executionPlan));
+  }
 
   const outcomesByStep = new Map<ExecutionStep, ExecOutcome>();
   for (const results of executed) {

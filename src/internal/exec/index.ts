@@ -12,6 +12,7 @@
 export {
   buildHookEnv,
   executeHooks,
+  HOOKASSERT_DEFAULT_CONCURRENCY,
   HOOKASSERT_DEFAULT_ENV_KEYS,
   HOOKASSERT_DEFAULT_TIMEOUT_MS,
   isCredentialShapedEnvKey,

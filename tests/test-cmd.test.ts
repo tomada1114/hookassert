@@ -4,7 +4,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { runCli, type CliDeps } from "../src/cli.js";
 import { NodeSpawner } from "../src/internal/exec/spawner.js";
@@ -700,5 +700,83 @@ describe("machine guarantees", () => {
     );
     expect(testResult.exitCode).toBe(0);
     expect(spawner.calls.length).toBeGreaterThan(0);
+  });
+});
+
+describe("cross-file concurrency cap (issue #40)", () => {
+  /**
+   * A `Spawner` whose calls stay pending until manually released, and which
+   * records the maximum number of calls in flight at once — used here to
+   * prove `runTest` runs its fixture files' pools one at a time rather than
+   * letting every file's own `HOOKASSERT_DEFAULT_CONCURRENCY`-sized pool run
+   * in parallel with the others (the fan-out issue #40 was filed against).
+   */
+  class GatedSpawner implements Spawner {
+    readonly calls: SpawnRequest[] = [];
+    readonly #pending: (() => void)[] = [];
+    #current = 0;
+    maxObserved = 0;
+
+    spawn(req: SpawnRequest): Promise<ExecOutcome> {
+      this.calls.push(req);
+      this.#current += 1;
+      this.maxObserved = Math.max(this.maxObserved, this.#current);
+      return new Promise((resolve) => {
+        this.#pending.push(() => {
+          this.#current -= 1;
+          resolve({ exitCode: 0, stdout: "", stderr: "", timedOut: false });
+        });
+      });
+    }
+
+    /** Resolves every call currently pending, letting its worker move on. */
+    releasePending(): void {
+      const toRelease = this.#pending.splice(0, this.#pending.length);
+      for (const resolveOne of toRelease) {
+        resolveOne();
+      }
+    }
+  }
+
+  /** Releases every pending call, then waits until the next call shows up. */
+  async function releaseAndWaitForNextCall(spawner: GatedSpawner): Promise<void> {
+    const before = spawner.calls.length;
+    spawner.releasePending();
+    await vi.waitFor(() => {
+      expect(spawner.calls.length).toBeGreaterThan(before);
+    });
+  }
+
+  it("never runs more than one fixture file's pool at once across several files", async () => {
+    const spawner = new GatedSpawner();
+    const casesPerFile = [
+      { event: "PreToolUse", tool: "Bash", expect: {} },
+      { event: "PreToolUse", tool: "Write", expect: {} },
+      { event: "PreToolUse", tool: "Edit", expect: {} },
+    ];
+    const fixturePaths = Array.from({ length: 3 }, () =>
+      writeFixture({ cases: casesPerFile }),
+    );
+    const totalSpawns = fixturePaths.length * casesPerFile.length;
+
+    const resultPromise = runCli(
+      ["test", ...fixturePaths, "--claude-version", "2.1.300", "--yes"],
+      "hookassert",
+      testDeps({ spawner }),
+    );
+
+    while (spawner.calls.length < totalSpawns) {
+      await releaseAndWaitForNextCall(spawner);
+    }
+    spawner.releasePending();
+
+    const result = await resultPromise;
+
+    expect(spawner.calls).toHaveLength(totalSpawns);
+    // Each file's own pool spawns at most `casesPerFile.length` calls at
+    // once. If the files' pools ran in parallel instead of sequentially,
+    // this could reach up to `totalSpawns`.
+    expect(spawner.maxObserved).toBeLessThanOrEqual(casesPerFile.length);
+    expect(result.exitCode).toBe(0);
   });
 });

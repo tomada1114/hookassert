@@ -37,6 +37,28 @@ import type { Spawner, SpawnRequest } from "./spawner.js";
 export const HOOKASSERT_DEFAULT_TIMEOUT_MS = 10_000;
 
 /**
+ * The default cap on how many steps {@link executeHooks} spawns at once.
+ *
+ * @remarks
+ * `test` runs the user's own hooks on the user's own machine; the concrete
+ * failure this bounds is `Promise.all`-ing every step of a real
+ * `ExecutionPlan` at once, which for a fixture set with many cases against a
+ * settings tree with several hooks per event can reach hundreds of
+ * simultaneous children, enough to hit `EAGAIN`/`EMFILE` on the spawner
+ * itself.
+ *
+ * `8` is a fixed constant rather than a dynamic `os.availableParallelism()`
+ * read, measured with real child processes: it is the CPU-bound optimum
+ * (more workers than cores slows a CPU-bound run down from context
+ * switching), and I/O-bound throughput keeps improving past `8` only with
+ * sharply diminishing returns. A fixed default also keeps a run's behavior
+ * independent of the machine it happens to run on. {@link ExecDeps.concurrency}
+ * overrides this per run; wiring a `--concurrency` flag to it is a
+ * CLI-surface addition left for a future change.
+ */
+export const HOOKASSERT_DEFAULT_CONCURRENCY = 8;
+
+/**
  * The effective default timeout for a run: the shorter of hookassert's own
  * default and the loaded spec's `defaults.hookTimeoutMs`.
  *
@@ -253,6 +275,14 @@ export interface ExecDeps {
    * spec.defaults.hookTimeoutMs)`, unchanged.
    */
   readonly explicitDefaultTimeoutMs?: number;
+
+  /**
+   * Maximum number of steps {@link executeHooks} runs at once. Omit to use
+   * {@link HOOKASSERT_DEFAULT_CONCURRENCY}; see its remark for how that
+   * default was chosen. When given, must be an integer `>= 1`; `executeHooks`
+   * throws a `RangeError` otherwise rather than silently coercing it.
+   */
+  readonly concurrency?: number;
 }
 
 /**
@@ -340,6 +370,39 @@ async function runStep(
 }
 
 /**
+ * Run `fn` over every item of `items`, at most `limit` invocations in flight
+ * at once, and return the results in `items`' own order.
+ *
+ * @remarks
+ * A small worker pool rather than chunking `items` into `Math.ceil(items.length
+ * / limit)` batches and `Promise.all`-ing each batch in turn: batching would
+ * let one slow item stall every other item in its batch even while other
+ * workers sit idle, whereas each worker here pulls the next item the instant
+ * it finishes its current one. `items.entries()` — rather than an indexed
+ * `items[i]` loop — is what lets multiple workers share one iterator safely:
+ * each `for...of` step calls the shared iterator's `next()` synchronously, so
+ * two workers can never race onto the same index.
+ */
+async function runWithConcurrencyLimit<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: (R | undefined)[] = new Array<R | undefined>(items.length);
+  const iterator = items.entries();
+
+  async function worker(): Promise<void> {
+    for (const [index, item] of iterator) {
+      results[index] = await fn(item);
+    }
+  }
+
+  const workerCount = Math.max(1, Math.min(limit, items.length));
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return results as R[];
+}
+
+/**
  * Run every step of `plan` whose event `plan.assertedEvents` actually
  * references, and report each one's `ExecOutcome` paired with the step it
  * belongs to.
@@ -349,22 +412,48 @@ async function runStep(
  * anything about it is inspected further — not spawned, and not even
  * checked for a `stub` — so it contributes nothing to the returned array
  * rather than a placeholder entry. Order among the steps that do run follows
- * `plan.steps`'s own order, but all of them run concurrently
- * (`Promise.all`): nothing about one step's outcome depends on another's.
+ * `plan.steps`'s own order.
+ *
+ * At most `deps.concurrency` (default {@link HOOKASSERT_DEFAULT_CONCURRENCY})
+ * steps are ever in flight at once — see that constant's remark for why a
+ * plan built from a real `FixtureSet` cannot be trusted to stay small enough
+ * to `Promise.all` outright. The cap applies to every step this function
+ * considers running, `stub`-declared or not: a stubbed step never reaches
+ * `deps.spawner` regardless (see `runStep`), so it occupies a worker only for
+ * the negligible time {@link stubbedOutcome} takes, never competing with a
+ * real spawn for the resources the cap protects.
  *
  * Each result carries its own `step` rather than being returned as a bare
  * positional `ExecOutcome[]`: the array here is already filtered down from
  * `plan.steps`, so a caller that only sees `plan.steps` (never the filtered
  * list) cannot reliably index back from a returned outcome to the hook that
- * produced it without re-deriving the identical filter.
+ * produced it without re-deriving the identical filter. `runWithConcurrencyLimit`
+ * preserves `relevant`'s order in its result regardless of which worker
+ * happened to finish which item first, so this pairing survives the cap the
+ * same way it survived the previous unbounded `Promise.all`.
+ *
+ * @throws {RangeError} `deps.concurrency` is given but is not an integer
+ * `>= 1` — a value such as `0`, a fraction, or `NaN` is rejected here rather
+ * than silently clamped, since a clamp that turns `NaN` into `0` workers
+ * would resolve with no hook ever spawned.
  */
 export async function executeHooks(
   deps: ExecDeps,
   plan: ExecutionPlan,
 ): Promise<readonly ExecutionResult[]> {
+  if (
+    deps.concurrency !== undefined &&
+    !(Number.isInteger(deps.concurrency) && deps.concurrency >= 1)
+  ) {
+    throw new RangeError(
+      `ExecDeps.concurrency must be an integer >= 1, got ${String(deps.concurrency)}.`,
+    );
+  }
   const env = envForDeps(deps);
   const relevant = plan.steps.filter((step) => plan.assertedEvents.has(step.event));
-  return Promise.all(
-    relevant.map(async (step) => ({ step, outcome: await runStep(deps, step, env) })),
-  );
+  const concurrency = deps.concurrency ?? HOOKASSERT_DEFAULT_CONCURRENCY;
+  return runWithConcurrencyLimit(relevant, concurrency, async (step) => ({
+    step,
+    outcome: await runStep(deps, step, env),
+  }));
 }
