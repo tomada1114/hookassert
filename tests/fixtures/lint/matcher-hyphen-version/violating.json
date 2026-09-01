@@ -1,0 +1,10 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "mcp__stripe-mcp__create_payment",
+        "hooks": [{ "type": "command", "command": "./guard.sh" }]
+      }
+    ]
+  }
+}

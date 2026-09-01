@@ -382,6 +382,7 @@ export default defineConfig([
       "tests/fixture.test.ts",
       "tests/assert.test.ts",
       "tests/test-cmd.test.ts",
+      "tests/lint.test.ts",
     ],
     rules: {
       "no-restricted-imports": "off",

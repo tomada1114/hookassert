@@ -28,3 +28,5 @@ export {
   toJsonTestReport,
 } from "./testReport.js";
 export type { JsonTestReport, TestCaseReport, TestReport } from "./testReport.js";
+export { renderLintPretty } from "./lintReport.js";
+export type { LintReport } from "./lintReport.js";
