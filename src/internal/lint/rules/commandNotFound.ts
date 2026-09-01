@@ -5,11 +5,12 @@
  * @remarks
  * Resolution is entirely static — `commandProbe.ts`'s `resolveCommandTarget`
  * — and covers both spawn forms: an absolute path is checked as-is, a
- * relative path (`./guard.sh`, `scripts/guard.sh`) resolves against the
- * settings file's own project root, and a bare command word (`npx`, `jq`) is
- * looked up on `ctx.pathEnv`. See `commandProbe.ts`'s own remarks for why
- * none of this ever spawns a process — the "not in scope" note this issue's
- * design carries.
+ * relative path (`./guard.sh`, `scripts/guard.sh`) resolves against
+ * `ctx.projectRoot`, and a bare command word (`npx`, `jq`) is looked up on
+ * `ctx.pathEnv`. A resolution of `"indeterminate"` (a shell builtin, or a
+ * `$VAR` that could not be expanded) is never reported — see
+ * `commandProbe.ts`'s own remarks for why none of this ever spawns a
+ * process to check whether a command would actually launch.
  */
 
 import { commandTarget, resolveCommandTarget } from "../commandProbe.js";
@@ -21,8 +22,8 @@ export const commandNotFoundRule: LintRule = {
   run(ctx: LintContext): readonly Finding[] {
     const findings: Finding[] = [];
     for (const command of ctx.commands) {
-      const resolution = resolveCommandTarget(command, ctx.pathEnv);
-      if (resolution.kind === "resolved") {
+      const resolution = resolveCommandTarget(command, ctx);
+      if (resolution.kind !== "not-found") {
         continue;
       }
 

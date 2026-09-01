@@ -22,7 +22,7 @@ export const notExecutableRule: LintRule = {
   run(ctx: LintContext): readonly Finding[] {
     const findings: Finding[] = [];
     for (const command of ctx.commands) {
-      const resolution = resolveCommandTarget(command, ctx.pathEnv);
+      const resolution = resolveCommandTarget(command, ctx);
       if (resolution.kind !== "resolved") {
         continue;
       }

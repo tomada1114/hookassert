@@ -137,17 +137,42 @@ export interface LintContext {
   readonly commands: readonly LintHookCommand[];
 
   /**
+   * The project root a relative command path (`./guard.sh`,
+   * `scripts/guard.sh`) resolves against, and the value
+   * `$CLAUDE_PROJECT_DIR`/`${CLAUDE_PROJECT_DIR}` expands to inside a
+   * command string.
+   *
+   * @remarks
+   * Claude Code, and this project's own executor, run every hook with cwd
+   * set to the project root regardless of which settings layer declared it
+   * (`src/cli.ts`'s `runTest` passes `projectRoot: deps.cwd`) — never the
+   * settings file's own directory. `buildLintContext` sets this from the
+   * same `deps.cwd` the dynamic layer uses, so a relative command resolves
+   * identically whether `lint` or a real run is doing the resolving.
+   */
+  readonly projectRoot: string;
+
+  /**
    * The `PATH` environment variable value the command rules resolve a bare
    * command word against, or `undefined` when none is set.
    *
    * @remarks
    * Carried on `LintContext` — rather than read from `process.env` inside
    * each rule — so a test can inject a deterministic value instead of
-   * depending on the host machine's own `PATH`. `buildLintContext` defaults
-   * this to the running process's real `PATH` when a caller does not pass
-   * one explicitly.
+   * depending on the host machine's own `PATH`.
    */
   readonly pathEnv: string | undefined;
+
+  /**
+   * The `HOME` environment variable value a leading `~/` in a command
+   * expands against, or `undefined` when none is set.
+   *
+   * @remarks
+   * Carried on `LintContext` for the same reason `pathEnv` is: a test
+   * injects a deterministic value instead of depending on the host
+   * machine's own `HOME`.
+   */
+  readonly homeDir: string | undefined;
 }
 
 /**

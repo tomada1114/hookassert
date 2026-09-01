@@ -344,12 +344,23 @@ export function readHookCommands(source: SettingsSource): readonly LintHookComma
   return readGroupsAndCommands(source).commands;
 }
 
-/** Build the `LintContext` every `LintRule` runs over, from every settings source `lint` discovered. */
+/**
+ * Build the `LintContext` every `LintRule` runs over, from every settings
+ * source `lint` discovered.
+ *
+ * @remarks
+ * `env` is read for `PATH`/`HOME` only, and defaults to `{}` rather than
+ * `process.env` — a caller that wants the running process's real
+ * environment (`src/cli.ts`'s `runLint`, which passes `deps.env`) says so
+ * explicitly, so a test builds a `LintContext` that depends only on what it
+ * injects, never on the host machine's own environment.
+ */
 export function buildLintContext(
   sources: readonly SettingsSource[],
   spec: LintContext["spec"],
   versionContext: LintContext["versionContext"],
-  pathEnv: string | undefined = process.env["PATH"],
+  projectRoot: string,
+  env: Readonly<Record<string, string | undefined>> = {},
 ): LintContext {
   const groups: LintMatcherGroup[] = [];
   const commands: LintHookCommand[] = [];
@@ -358,5 +369,13 @@ export function buildLintContext(
     groups.push(...read.groups);
     commands.push(...read.commands);
   }
-  return { spec, versionContext, groups, commands, pathEnv };
+  return {
+    spec,
+    versionContext,
+    groups,
+    commands,
+    projectRoot,
+    pathEnv: env["PATH"],
+    homeDir: env["HOME"],
+  };
 }

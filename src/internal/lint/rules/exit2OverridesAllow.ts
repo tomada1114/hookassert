@@ -8,8 +8,7 @@
  * from a real `ExecOutcome`; this rule flags the hook structure that would
  * trigger it before any process runs. `exit 2` always wins over an `allow`
  * payload, whichever branch produced each — `Finding.message` states that
- * override rule explicitly, per this issue's own acceptance criterion,
- * rather than only flagging the ambiguity.
+ * override rule explicitly, rather than only flagging the ambiguity.
  *
  * Heuristic co-occurrence check, not a control-flow analysis:
  * `hookSourceText` scans the command string, its `args`, and (when
@@ -32,7 +31,7 @@ export const exit2OverridesAllowRule: LintRule = {
   run(ctx: LintContext): readonly Finding[] {
     const findings: Finding[] = [];
     for (const command of ctx.commands) {
-      const text = hookSourceText(command, ctx.pathEnv);
+      const text = hookSourceText(command, ctx);
       if (!ALLOW_JSON.test(text) || !EXIT_2.test(text)) {
         continue;
       }

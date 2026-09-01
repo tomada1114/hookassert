@@ -4,13 +4,12 @@
  * exits `1` rather than `2`.
  *
  * @remarks
- * The static sibling of `#6`'s runtime "exit 1 resolves to `pass`" behavior
- * (`src/internal/decision/resolve.ts`'s own handling of a documented
- * `non-blocking-error`/`ignored` exit-code effect) — same fact, surfaced
+ * The static sibling of `src/internal/decision/resolve.ts`'s own runtime
+ * handling of a documented `non-blocking-error`/`ignored` exit-code effect —
+ * exit 1 never blocks; only exit 2 does. This rule surfaces that same fact
  * before any process runs. `Finding.message` states the actual semantics
- * explicitly, per this issue's own acceptance criterion: only `exit 2`
- * blocks, and the tool call proceeds anyway on any other non-zero exit
- * regardless of what the hook "intended."
+ * explicitly: only `exit 2` blocks, and the tool call proceeds anyway on any
+ * other non-zero exit regardless of what the hook "intended."
  *
  * Heuristic, not a real control-flow analysis: `hookSourceText` scans the
  * command string, its `args`, and (when resolvable) the script file it
@@ -34,7 +33,7 @@ export const exit1PolicyRule: LintRule = {
   run(ctx: LintContext): readonly Finding[] {
     const findings: Finding[] = [];
     for (const command of ctx.commands) {
-      const text = hookSourceText(command, ctx.pathEnv);
+      const text = hookSourceText(command, ctx);
       if (!CONDITIONAL.test(text) || !EXIT_1.test(text) || EXIT_2.test(text)) {
         continue;
       }

@@ -2,9 +2,8 @@
  * The active `LintRule`s the `lint` subcommand iterates.
  *
  * @remarks
- * The five matcher rules from a prior issue, plus this issue's six
- * command/exit-code rules (`command-not-found`, `missing-shebang`,
- * `not-executable`, `unquoted-var`, `exit-1-policy`,
+ * Five matcher rules, plus six command/exit-code rules (`command-not-found`,
+ * `missing-shebang`, `not-executable`, `unquoted-var`, `exit-1-policy`,
  * `exit-2-overrides-allow`). `docs/troubleshooting-map.md` maps official
  * Claude Code troubleshooting symptoms to a subset of these rule ids;
  * `tests/troubleshooting-map.test.ts` asserts every id it references still
