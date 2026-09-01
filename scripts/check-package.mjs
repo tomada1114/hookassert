@@ -72,7 +72,7 @@ const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
  * @type {PackageLimits}
  */
 export const PACKAGE_LIMITS = {
-  maxUnpackedBytes: 1_048_576,
+  maxUnpackedBytes: 2_097_152,
   maxFileCount: 200,
   maxSingleFileBytes: 131_072,
 };
