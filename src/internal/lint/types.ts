@@ -79,6 +79,49 @@ export interface LintMatcherGroup {
   readonly matcher: LintMatcherValue;
 }
 
+/**
+ * One `hooks.<event>[].hooks[]` command declaration, read alongside its
+ * owning {@link LintMatcherGroup}.
+ *
+ * @remarks
+ * Deliberately a separate array on `LintContext` rather than nested inside
+ * `LintMatcherGroup`: a group's `matcher` and its `hooks[]` commands are
+ * independent concerns — the five matcher rules never need a command, and
+ * the six command/exit-code rules never need a matcher — so keeping them
+ * apart lets each rule iterate only the array it actually cares about.
+ */
+export interface LintHookCommand {
+  /** Absolute path of the settings file this command was declared in. */
+  readonly file: string;
+
+  /** Which merged layer {@link LintHookCommand.file} belongs to. */
+  readonly layer: SettingsLayer;
+
+  /** The event this command is declared under. */
+  readonly event: EventName;
+
+  /** 1-based line of this command's own entry in `hooks.<event>[].hooks[]`. */
+  readonly line: number;
+
+  /** The command Claude Code spawns for this hook. */
+  readonly command: string;
+
+  /**
+   * Arguments passed to {@link LintHookCommand.command}, or `undefined` when
+   * the declaration passes none.
+   *
+   * @remarks
+   * Mirrors `ResolvedHook.args`'s own convention: `undefined` (no `args` key
+   * at all) selects Claude Code's shell form (`sh -c "<command>"`); a present
+   * `args` array — including an explicitly empty one — selects exec form,
+   * with no shell involved. This is exactly the distinction
+   * `src/internal/exec/executor.ts`'s `buildSpawnRequest` makes; the command
+   * rules mirror it statically rather than importing that dynamic-layer
+   * module.
+   */
+  readonly args: readonly string[] | undefined;
+}
+
 /** What a `LintRule` reads from, to run over every settings source `lint` discovered. */
 export interface LintContext {
   /** The loaded hooks spec every rule classifies matchers against. */
@@ -89,6 +132,47 @@ export interface LintContext {
 
   /** Every matcher group read from every settings source, across every layer. */
   readonly groups: readonly LintMatcherGroup[];
+
+  /** Every hook command read from every settings source, across every layer. */
+  readonly commands: readonly LintHookCommand[];
+
+  /**
+   * The project root a relative command path (`./guard.sh`,
+   * `scripts/guard.sh`) resolves against, and the value
+   * `$CLAUDE_PROJECT_DIR`/`${CLAUDE_PROJECT_DIR}` expands to inside a
+   * command string.
+   *
+   * @remarks
+   * Claude Code, and this project's own executor, run every hook with cwd
+   * set to the project root regardless of which settings layer declared it
+   * (`src/cli.ts`'s `runTest` passes `projectRoot: deps.cwd`) — never the
+   * settings file's own directory. `buildLintContext` sets this from the
+   * same `deps.cwd` the dynamic layer uses, so a relative command resolves
+   * identically whether `lint` or a real run is doing the resolving.
+   */
+  readonly projectRoot: string;
+
+  /**
+   * The `PATH` environment variable value the command rules resolve a bare
+   * command word against, or `undefined` when none is set.
+   *
+   * @remarks
+   * Carried on `LintContext` — rather than read from `process.env` inside
+   * each rule — so a test can inject a deterministic value instead of
+   * depending on the host machine's own `PATH`.
+   */
+  readonly pathEnv: string | undefined;
+
+  /**
+   * The `HOME` environment variable value a leading `~/` in a command
+   * expands against, or `undefined` when none is set.
+   *
+   * @remarks
+   * Carried on `LintContext` for the same reason `pathEnv` is: a test
+   * injects a deterministic value instead of depending on the host
+   * machine's own `HOME`.
+   */
+  readonly homeDir: string | undefined;
 }
 
 /**

@@ -545,7 +545,7 @@ function runLint(args: readonly string[], deps: CliDeps): CliResult {
     ...(explicitSettings === undefined ? {} : { explicit: explicitSettings }),
   });
 
-  const ctx = buildLintContext(sources, spec, versionContext);
+  const ctx = buildLintContext(sources, spec, versionContext, deps.cwd, deps.env);
   const findings = LINT_RULES.flatMap((rule) => rule.run(ctx));
 
   const report: LintReport = {

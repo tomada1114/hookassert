@@ -1,6 +1,7 @@
 /**
- * Reads every `hooks.<event>[]` matcher group out of a settings file,
- * tolerant of a matcher declared as a JSON array.
+ * Reads every `hooks.<event>[]` matcher group and `hooks.<event>[].hooks[]`
+ * command declaration out of a settings file, tolerant of a matcher declared
+ * as a JSON array.
  *
  * @remarks
  * Static layer: reads a file's text and parses it, but never spawns a
@@ -21,7 +22,9 @@
  * throwing. Any other shape (a number, a boolean, an object) is still
  * rejected exactly as `settings/load.ts` would reject it — this module is
  * not a general-purpose lenient settings reader, only the one exception
- * `matcher-is-array` needs.
+ * `matcher-is-array` needs. Every command entry (`hooks.<event>[].hooks[]`)
+ * is read with the same strictness `settings/load.ts`'s own
+ * `readCommandHooks` applies — no exception carved out there.
  */
 
 import { readFileSync } from "node:fs";
@@ -36,7 +39,12 @@ import {
 import type { EventName } from "../../types.js";
 import { SettingsParseError } from "../errors.js";
 import type { SettingsSource } from "../settings/index.js";
-import type { LintContext, LintMatcherGroup, LintMatcherValue } from "./types.js";
+import type {
+  LintContext,
+  LintHookCommand,
+  LintMatcherGroup,
+  LintMatcherValue,
+} from "./types.js";
 
 /**
  * The event names this reader recognizes — the same set
@@ -157,6 +165,29 @@ function requireString(
   return node.value;
 }
 
+function requireNonEmptyString(
+  node: Node | undefined,
+  source: SettingsSource,
+  description: string,
+): string {
+  const value = requireString(node, source, description);
+  if (value.length === 0) {
+    fail(source, `${description} must be a non-empty string`);
+  }
+  return value;
+}
+
+function readStringArray(
+  node: Node,
+  source: SettingsSource,
+  description: string,
+): readonly string[] {
+  const elements = requireArray(node, source, description);
+  return elements.map((element) =>
+    requireString(element, source, `every element of ${description}`),
+  );
+}
+
 /**
  * Read one group's `matcher` property tolerantly: `absent`, `string`, or
  * `array` never throw — anything else is still a structural error, exactly
@@ -183,17 +214,51 @@ function readMatcherValue(
 }
 
 /**
- * Read every matcher group `source` declares.
- *
- * @remarks
- * A missing file contributes zero groups — the same "most projects declare
- * only one or two of the three well-known layers" convention
- * `settings/load.ts` follows. A file that exists but cannot be parsed as
- * JSONC, or whose `hooks` value is not shaped the way Claude Code's own
- * settings schema requires (beyond the one exception above), throws
- * {@link SettingsParseError}.
+ * Read one group's own `hooks: [...]` command entries — the same shape
+ * `settings/load.ts`'s `readCommandHooks` reads, minus the `timeoutMs`
+ * conversion and `dedupeKey` fields the command rules never need.
  */
-export function readMatcherGroups(source: SettingsSource): readonly LintMatcherGroup[] {
+function readGroupCommands(
+  groupNode: Node,
+  event: EventName,
+  source: SettingsSource,
+  text: string,
+): readonly LintHookCommand[] {
+  const commandsNode = getProperty(groupNode, "hooks");
+  const commandNodes = requireArray(commandsNode, source, `"hooks.${event}[].hooks"`);
+
+  return commandNodes.map((hookNode) => {
+    requireObject(hookNode, source, `an entry of "hooks.${event}[].hooks"`);
+
+    const commandNode = getProperty(hookNode, "command");
+    const command = requireNonEmptyString(
+      commandNode,
+      source,
+      `"hooks.${event}[].hooks[].command"`,
+    );
+
+    const argsNode = getProperty(hookNode, "args");
+    const args =
+      argsNode === undefined
+        ? undefined
+        : readStringArray(argsNode, source, `"hooks.${event}[].hooks[].args"`);
+
+    return {
+      file: source.path,
+      layer: source.layer,
+      event,
+      line: lineAt(text, hookNode.offset),
+      command,
+      args,
+    } satisfies LintHookCommand;
+  });
+}
+
+/** {@link readMatcherGroups} and {@link readHookCommands}' shared, single-parse implementation. */
+function readGroupsAndCommands(source: SettingsSource): {
+  readonly groups: readonly LintMatcherGroup[];
+  readonly commands: readonly LintHookCommand[];
+} {
   let text: string;
   try {
     text = readFileSync(source.path, "utf8");
@@ -204,7 +269,7 @@ export function readMatcherGroups(source: SettingsSource): readonly LintMatcherG
       "code" in error &&
       error.code === "ENOENT"
     ) {
-      return [];
+      return { groups: [], commands: [] };
     }
     throw error;
   }
@@ -218,11 +283,12 @@ export function readMatcherGroups(source: SettingsSource): readonly LintMatcherG
 
   const hooksNode = getProperty(rootNode, "hooks");
   if (hooksNode === undefined) {
-    return [];
+    return { groups: [], commands: [] };
   }
   requireObject(hooksNode, source, '"hooks"');
 
   const groups: LintMatcherGroup[] = [];
+  const commands: LintHookCommand[] = [];
   for (const property of hooksNode.children ?? []) {
     const [keyNode, groupsNode] = property.children ?? [];
     const eventKey = requireString(keyNode, source, 'every key of "hooks"');
@@ -245,21 +311,71 @@ export function readMatcherGroups(source: SettingsSource): readonly LintMatcherG
         line,
         matcher,
       });
+      commands.push(...readGroupCommands(groupNode, eventKey, source, text));
     }
   }
 
-  return groups;
+  return { groups, commands };
 }
 
-/** Build the `LintContext` every `LintRule` runs over, from every settings source `lint` discovered. */
+/**
+ * Read every matcher group `source` declares.
+ *
+ * @remarks
+ * A missing file contributes zero groups — the same "most projects declare
+ * only one or two of the three well-known layers" convention
+ * `settings/load.ts` follows. A file that exists but cannot be parsed as
+ * JSONC, or whose `hooks` value is not shaped the way Claude Code's own
+ * settings schema requires (beyond the one exception above), throws
+ * {@link SettingsParseError}.
+ */
+export function readMatcherGroups(source: SettingsSource): readonly LintMatcherGroup[] {
+  return readGroupsAndCommands(source).groups;
+}
+
+/**
+ * Read every hook command `source` declares, across every matcher group.
+ *
+ * @remarks
+ * Same tolerance and structural strictness as {@link readMatcherGroups} —
+ * both are views over the same single parse of `source`'s text.
+ */
+export function readHookCommands(source: SettingsSource): readonly LintHookCommand[] {
+  return readGroupsAndCommands(source).commands;
+}
+
+/**
+ * Build the `LintContext` every `LintRule` runs over, from every settings
+ * source `lint` discovered.
+ *
+ * @remarks
+ * `env` is read for `PATH`/`HOME` only, and defaults to `{}` rather than
+ * `process.env` — a caller that wants the running process's real
+ * environment (`src/cli.ts`'s `runLint`, which passes `deps.env`) says so
+ * explicitly, so a test builds a `LintContext` that depends only on what it
+ * injects, never on the host machine's own environment.
+ */
 export function buildLintContext(
   sources: readonly SettingsSource[],
   spec: LintContext["spec"],
   versionContext: LintContext["versionContext"],
+  projectRoot: string,
+  env: Readonly<Record<string, string | undefined>> = {},
 ): LintContext {
+  const groups: LintMatcherGroup[] = [];
+  const commands: LintHookCommand[] = [];
+  for (const source of sources) {
+    const read = readGroupsAndCommands(source);
+    groups.push(...read.groups);
+    commands.push(...read.commands);
+  }
   return {
     spec,
     versionContext,
-    groups: sources.flatMap((source) => readMatcherGroups(source)),
+    groups,
+    commands,
+    projectRoot,
+    pathEnv: env["PATH"],
+    homeDir: env["HOME"],
   };
 }

@@ -384,6 +384,7 @@ export default defineConfig([
       "tests/test-cmd.test.ts",
       "tests/lint.test.ts",
       "tests/record.test.ts",
+      "tests/troubleshooting-map.test.ts",
     ],
     rules: {
       "no-restricted-imports": "off",

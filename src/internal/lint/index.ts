@@ -7,11 +7,12 @@
  * why that boundary is enforced mechanically, not just by convention.
  */
 
-export { buildLintContext, readMatcherGroups } from "./parse.js";
+export { buildLintContext, readHookCommands, readMatcherGroups } from "./parse.js";
 export { LINT_RULES } from "./registry.js";
 export type {
   Finding,
   LintContext,
+  LintHookCommand,
   LintMatcherGroup,
   LintMatcherValue,
   LintRule,

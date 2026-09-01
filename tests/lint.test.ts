@@ -9,7 +9,11 @@ import {
   LINT_RULES,
   readMatcherGroups,
 } from "../src/internal/lint/index.js";
-import type { LintContext, LintRule } from "../src/internal/lint/index.js";
+import type {
+  LintContext,
+  LintHookCommand,
+  LintRule,
+} from "../src/internal/lint/index.js";
 import type { VersionContext } from "../src/internal/matcher/index.js";
 import {
   buildReportHeader,
@@ -80,6 +84,19 @@ const OUT_OF_RANGE_VERSION: VersionContext = {
   version: parseClaudeVersion("3.0.0"),
 };
 
+/**
+ * Known, inside `REAL_SPEC.claudeCodeRange`, and above both notation rules'
+ * own `sinceVersion` — satisfies `matcher-comma-version` and
+ * `matcher-hyphen-version` outright rather than degrading to their own
+ * unknown-confidence finding the way `UNDETERMINED` does. Used only where a
+ * test's own point is a different rule entirely and an unrelated
+ * undetermined-version finding would otherwise be noise.
+ */
+const NOTATION_SATISFIED_VERSION: VersionContext = {
+  kind: "known",
+  version: parseClaudeVersion("2.1.260"),
+};
+
 function ruleFixtureSource(
   ruleId: string,
   file: "violating.json" | "clean.json",
@@ -95,8 +112,9 @@ function contextFor(
   source: SettingsSource,
   versionContext: VersionContext = UNDETERMINED,
   spec: Spec = REAL_SPEC,
+  projectRoot: string = path.dirname(source.path),
 ): LintContext {
-  return buildLintContext([source], spec, versionContext);
+  return buildLintContext([source], spec, versionContext, projectRoot);
 }
 
 function ruleById(id: string): LintRule {
@@ -107,7 +125,60 @@ function ruleById(id: string): LintRule {
   return rule;
 }
 
-/** The five matcher rules this issue ships, in `LINT_RULES`'s own order. */
+/** `commandContext`'s own default `projectRoot`: the directory `hookCommand`'s default `file` sits in. */
+const COMMAND_NOT_FOUND_FIXTURE_DIR = path.dirname(
+  ruleFixtureSource("command-not-found", "clean.json").path,
+);
+
+/**
+ * Build one `LintHookCommand` for a hand-constructed `LintContext`, the same
+ * way the file's other rule-specific `describe` blocks build a bespoke
+ * `LintMatcherGroup` inline. `file` defaults to a real committed fixture
+ * settings file (`command-not-found`'s own `clean.json`) rather than a
+ * synthetic path — a real, already-committed directory for a relative
+ * `command` to resolve against without this file creating any filesystem
+ * state of its own — see `placing-tests`'s unit project rule this file
+ * stays inside.
+ */
+function hookCommand(overrides: Partial<LintHookCommand> = {}): LintHookCommand {
+  return {
+    file: ruleFixtureSource("command-not-found", "clean.json").path,
+    layer: "project",
+    event: "PreToolUse",
+    line: 1,
+    command: "./present.sh",
+    args: undefined,
+    ...overrides,
+  };
+}
+
+/**
+ * A `LintContext` carrying exactly `commands`, for the command/exit-code
+ * rules' own tests. `projectRoot` defaults to `COMMAND_NOT_FOUND_FIXTURE_DIR`
+ * — the directory `hookCommand`'s own default `file` sits in — so a relative
+ * `command` such as its default `"./present.sh"` resolves against a real,
+ * already-committed directory unless a test overrides it.
+ */
+function commandContext(
+  commands: readonly LintHookCommand[],
+  overrides: {
+    readonly pathEnv?: string;
+    readonly projectRoot?: string;
+    readonly homeDir?: string;
+  } = {},
+): LintContext {
+  return {
+    spec: REAL_SPEC,
+    versionContext: UNDETERMINED,
+    groups: [],
+    commands,
+    projectRoot: overrides.projectRoot ?? COMMAND_NOT_FOUND_FIXTURE_DIR,
+    pathEnv: overrides.pathEnv,
+    homeDir: overrides.homeDir,
+  };
+}
+
+/** The five matcher rules a prior issue ships, in `LINT_RULES`'s own order. */
 const RULE_IDS = [
   "matcher-is-array",
   "matcher-case",
@@ -117,9 +188,22 @@ const RULE_IDS = [
   "matcher-unanchored",
 ] as const;
 
+/** The six command/exit-code rules this issue ships, in `LINT_RULES`'s own order. */
+const COMMAND_RULE_IDS = [
+  "command-not-found",
+  "missing-shebang",
+  "not-executable",
+  "unquoted-var",
+  "exit-1-policy",
+  "exit-2-overrides-allow",
+] as const;
+
 describe("LINT_RULES: the registry", () => {
-  it("registers exactly the five matcher rules this issue ships", () => {
-    expect(LINT_RULES.map((rule) => rule.id)).toEqual(RULE_IDS);
+  it("registers exactly the five matcher rules and the six command/exit-code rules", () => {
+    expect(LINT_RULES.map((rule) => rule.id)).toEqual([
+      ...RULE_IDS,
+      ...COMMAND_RULE_IDS,
+    ]);
   });
 });
 
@@ -150,6 +234,34 @@ describe("every matcher rule", () => {
     const source = ruleFixtureSource(ruleId, "clean.json");
     expect(ruleById(ruleId).run(contextFor(source))).toEqual([]);
   });
+});
+
+describe("every command rule", () => {
+  it.each(COMMAND_RULE_IDS)(
+    "%s reports a Finding with file/line/ruleId/suggestion all set for its violating fixture",
+    (ruleId) => {
+      const source = ruleFixtureSource(ruleId, "violating.json");
+      const findings = ruleById(ruleId).run(contextFor(source));
+
+      expect(findings.length).toBeGreaterThan(0);
+      for (const finding of findings) {
+        expect(finding.ruleId).toBe(ruleId);
+        expect(finding.file).toBe(source.path);
+        expect(finding.line).toBeGreaterThan(0);
+        expect(finding.message.length).toBeGreaterThan(0);
+        expect(finding.suggestion.length).toBeGreaterThan(0);
+        expect(finding.suggestion).not.toBe(finding.message);
+      }
+    },
+  );
+
+  it.each(COMMAND_RULE_IDS)(
+    "%s reports zero findings for its clean fixture",
+    (ruleId) => {
+      const source = ruleFixtureSource(ruleId, "clean.json");
+      expect(ruleById(ruleId).run(contextFor(source))).toEqual([]);
+    },
+  );
 });
 
 describe("matcher-is-array", () => {
@@ -209,6 +321,10 @@ describe("matcher-case", () => {
           matcher: { kind: "string", value: "bash|Write" },
         },
       ],
+      commands: [],
+      projectRoot: REPO_ROOT,
+      pathEnv: undefined,
+      homeDir: undefined,
     };
     const [finding] = ruleById("matcher-case").run(ctx);
 
@@ -239,6 +355,10 @@ describe("matcher-dead", () => {
           matcher: { kind: "string", value: "mcp__github__create_issue" },
         },
       ],
+      commands: [],
+      projectRoot: REPO_ROOT,
+      pathEnv: undefined,
+      homeDir: undefined,
     };
     expect(ruleById("matcher-dead").run(ctx)).toEqual([]);
   });
@@ -281,6 +401,10 @@ describe("matcher-unanchored", () => {
           matcher: { kind: "string", value: "*" },
         },
       ],
+      commands: [],
+      projectRoot: REPO_ROOT,
+      pathEnv: undefined,
+      homeDir: undefined,
     };
     expect(rule.run(ctx)).toEqual([]);
   });
@@ -299,6 +423,10 @@ describe("matcher-unanchored", () => {
           matcher: { kind: "string", value: matcher },
         },
       ],
+      commands: [],
+      projectRoot: REPO_ROOT,
+      pathEnv: undefined,
+      homeDir: undefined,
     };
   }
 
@@ -384,6 +512,257 @@ describe.each([
   });
 });
 
+describe("command-not-found", () => {
+  const rule = ruleById("command-not-found");
+
+  it("explains that the hook cannot start at all", () => {
+    const source = ruleFixtureSource("command-not-found", "violating.json");
+    const [finding] = rule.run(contextFor(source));
+
+    expect(finding?.message).toContain("does not resolve to an existing");
+    expect(finding?.message).toContain("cannot start at all");
+  });
+
+  it("checks an absolute path as-is: resolves against a real file, flags a missing one", () => {
+    const existing = hookCommand({ command: path.join(REPO_ROOT, "package.json") });
+    expect(rule.run(commandContext([existing]))).toEqual([]);
+
+    const missing = hookCommand({
+      command: path.join(REPO_ROOT, "definitely-does-not-exist.txt"),
+    });
+    expect(rule.run(commandContext([missing])).length).toBeGreaterThan(0);
+  });
+
+  it("resolves a relative command against ctx.projectRoot, not the settings file's own directory", () => {
+    // command.file sits nowhere near REPO_ROOT, but "./package.json" only
+    // exists relative to REPO_ROOT — this only passes if resolution uses
+    // ctx.projectRoot (what Claude Code and the executor actually run
+    // hooks against), never the settings file's own containing directory.
+    const command = hookCommand({
+      file: path.join(REPO_ROOT, ".claude", "settings.json"),
+      command: "./package.json",
+    });
+    expect(rule.run(commandContext([command], { projectRoot: REPO_ROOT }))).toEqual([]);
+  });
+
+  it("skips a leading NAME=value environment assignment when extracting the shell target", () => {
+    const command = hookCommand({ command: "FOO=bar ./present.sh" });
+    expect(rule.run(commandContext([command]))).toEqual([]);
+  });
+
+  it("looks up a bare command word on ctx.pathEnv, one directory at a time, never spawning it", () => {
+    const pathEnv = path.dirname(
+      ruleFixtureSource("command-not-found", "clean.json").path,
+    );
+    const found = hookCommand({ command: "present.sh" });
+    expect(rule.run(commandContext([found], { pathEnv }))).toEqual([]);
+
+    const notFound = hookCommand({ command: "no-such-tool-xyz" });
+    expect(rule.run(commandContext([notFound], { pathEnv })).length).toBeGreaterThan(0);
+  });
+
+  it("never flags a resolved exec-form command, whose args are passed through as-is", () => {
+    const command = hookCommand({
+      command: path.join(REPO_ROOT, "package.json"),
+      args: [],
+    });
+    expect(rule.run(commandContext([command]))).toEqual([]);
+  });
+
+  it('expands a quoted "$CLAUDE_PROJECT_DIR" prefix to ctx.projectRoot before resolving', () => {
+    const command = hookCommand({ command: '"$CLAUDE_PROJECT_DIR"/present.sh' });
+    expect(
+      rule.run(
+        commandContext([command], { projectRoot: COMMAND_NOT_FOUND_FIXTURE_DIR }),
+      ),
+    ).toEqual([]);
+  });
+
+  it("expands an unquoted $CLAUDE_PROJECT_DIR prefix to ctx.projectRoot before resolving", () => {
+    const command = hookCommand({ command: "$CLAUDE_PROJECT_DIR/present.sh" });
+    expect(
+      rule.run(
+        commandContext([command], { projectRoot: COMMAND_NOT_FOUND_FIXTURE_DIR }),
+      ),
+    ).toEqual([]);
+  });
+
+  it("expands a leading ~/ to ctx.homeDir before resolving", () => {
+    const command = hookCommand({ command: "~/present.sh" });
+    expect(
+      rule.run(commandContext([command], { homeDir: COMMAND_NOT_FOUND_FIXTURE_DIR })),
+    ).toEqual([]);
+  });
+
+  it("skips resolution entirely — reports nothing — for a leading ~/ when ctx.homeDir is unset", () => {
+    const command = hookCommand({ command: "~/present.sh" });
+    expect(rule.run(commandContext([command]))).toEqual([]);
+  });
+
+  it("skips resolution entirely — reports nothing — for a target that still contains an unexpanded $VAR", () => {
+    const command = hookCommand({ command: "$SOME_OTHER_VAR/present.sh" });
+    expect(rule.run(commandContext([command]))).toEqual([]);
+  });
+
+  it("never flags a shell builtin or reserved word as an unresolvable PATH command", () => {
+    const command = hookCommand({ command: "exit 0" });
+    expect(rule.run(commandContext([command]))).toEqual([]);
+  });
+
+  it("resolves the word after a leading 'exec', not 'exec' itself", () => {
+    const found = hookCommand({ command: "exec ./present.sh" });
+    expect(rule.run(commandContext([found]))).toEqual([]);
+
+    const missing = hookCommand({ command: "exec ./missing-script.sh" });
+    expect(rule.run(commandContext([missing])).length).toBeGreaterThan(0);
+  });
+
+  it("never flags 'cd' as an unresolvable PATH command, even when it fronts a compound command", () => {
+    // Without the builtin allowlist, this only passed on a machine that
+    // happens to ship a real /usr/bin/cd (macOS does; a typical Ubuntu CI
+    // image does not) — "cd" is a shell builtin everywhere, never a
+    // PATH-resolvable executable.
+    const command = hookCommand({
+      command: 'cd "$CLAUDE_PROJECT_DIR" && ./present.sh',
+    });
+    expect(
+      rule.run(
+        commandContext([command], { projectRoot: COMMAND_NOT_FOUND_FIXTURE_DIR }),
+      ),
+    ).toEqual([]);
+  });
+});
+
+describe("missing-shebang", () => {
+  const rule = ruleById("missing-shebang");
+
+  it("names the resolved script path and explains the risk", () => {
+    const source = ruleFixtureSource("missing-shebang", "violating.json");
+    const [finding] = rule.run(contextFor(source));
+
+    expect(finding?.message).toContain('no "#!" shebang line');
+    expect(finding?.suggestion).toContain("#!");
+  });
+
+  it("never flags a command that command-not-found already owns (unresolvable)", () => {
+    const command = hookCommand({ command: "./does-not-exist-anywhere.sh" });
+    expect(rule.run(commandContext([command]))).toEqual([]);
+  });
+
+  it("never flags a resolved file whose extension is not script-like", () => {
+    const command = hookCommand({ command: path.join(REPO_ROOT, "package.json") });
+    expect(rule.run(commandContext([command]))).toEqual([]);
+  });
+});
+
+describe("not-executable", () => {
+  const rule = ruleById("not-executable");
+
+  it("names the resolved file path and explains the permission bit", () => {
+    const source = ruleFixtureSource("not-executable", "violating.json");
+    const [finding] = rule.run(contextFor(source));
+
+    expect(finding?.message).toContain("is not executable");
+    expect(finding?.suggestion).toContain("chmod +x");
+  });
+
+  it("never flags a command that command-not-found already owns (unresolvable)", () => {
+    const command = hookCommand({ command: "./does-not-exist-anywhere.sh" });
+    expect(rule.run(commandContext([command]))).toEqual([]);
+  });
+
+  it("never flags a resolved target that is a directory, not a regular file", () => {
+    const command = hookCommand({ command: REPO_ROOT, args: [] });
+    expect(rule.run(commandContext([command]))).toEqual([]);
+  });
+});
+
+describe("unquoted-var", () => {
+  const rule = ruleById("unquoted-var");
+
+  it("names the unquoted reference and explains word splitting / glob expansion", () => {
+    const source = ruleFixtureSource("unquoted-var", "violating.json");
+    const [finding] = rule.run(contextFor(source));
+
+    expect(finding?.message).toContain("$FILE");
+    expect(finding?.message).toContain("word splitting");
+    expect(finding?.suggestion).toContain('"$FILE"');
+  });
+
+  it("never flags an exec-form command, even with an unquoted-looking $VAR in its command string", () => {
+    const command = hookCommand({ command: "rm $FILE", args: [] });
+    expect(rule.run(commandContext([command]))).toEqual([]);
+  });
+
+  it("flags the braced ${VAR} form too", () => {
+    const command = hookCommand({ command: "rm ${FILE}" });
+    const [finding] = rule.run(commandContext([command]));
+    expect(finding?.message).toContain("${FILE}");
+  });
+
+  it("never flags a variable reference sitting inside single quotes", () => {
+    const command = hookCommand({ command: "echo '$FILE'" });
+    expect(rule.run(commandContext([command]))).toEqual([]);
+  });
+});
+
+describe("exit-1-policy", () => {
+  const rule = ruleById("exit-1-policy");
+
+  it("explains that only exit 2 blocks and the tool call proceeds anyway on exit 1", () => {
+    const source = ruleFixtureSource("exit-1-policy", "violating.json");
+    const [finding] = rule.run(contextFor(source));
+
+    expect(finding?.message).toContain("Only exit code 2 blocks");
+    expect(finding?.message).toContain("proceeds anyway");
+    expect(finding?.suggestion).toContain("exit 2");
+  });
+
+  it("never flags a plain 'exit 1' with no conditional logic around it", () => {
+    const command = hookCommand({ command: "echo denied; exit 1" });
+    expect(rule.run(commandContext([command]))).toEqual([]);
+  });
+
+  it("never flags a policy branch that already exits 2", () => {
+    const source = ruleFixtureSource("exit-1-policy", "clean.json");
+    expect(rule.run(contextFor(source))).toEqual([]);
+  });
+
+  it("never reads a resolved target's own file content when it is not script-like", () => {
+    // decoy.bin's own content is a textbook exit-1-policy violation
+    // (conditional logic plus an "exit 1" with no "exit 2" anywhere) — if
+    // hookSourceText read it despite the ".bin" extension, this would
+    // report a finding.
+    const command = hookCommand({ command: "./decoy.bin" });
+    expect(rule.run(commandContext([command]))).toEqual([]);
+  });
+});
+
+describe("exit-2-overrides-allow", () => {
+  const rule = ruleById("exit-2-overrides-allow");
+
+  it("states that exit 2 wins over the allow JSON payload", () => {
+    const source = ruleFixtureSource("exit-2-overrides-allow", "violating.json");
+    const [finding] = rule.run(contextFor(source));
+
+    expect(finding?.message).toContain("exit 2");
+    expect(finding?.message).toContain("override");
+    expect(finding?.message).toContain('"allow"');
+  });
+
+  it("also recognizes the nested hookSpecificOutput.permissionDecision allow shape", () => {
+    const command = hookCommand({
+      command: 'echo \'{"hookSpecificOutput":{"permissionDecision":"allow"}}\'; exit 2',
+    });
+    expect(rule.run(commandContext([command])).length).toBeGreaterThan(0);
+  });
+
+  it("never flags an allow decision with no exit 2 anywhere", () => {
+    const command = hookCommand({ command: 'echo \'{"decision":"allow"}\'; exit 0' });
+    expect(rule.run(commandContext([command]))).toEqual([]);
+  });
+});
+
 describe("readMatcherGroups: the tolerant reader's own structural strictness", () => {
   it("still throws SettingsParseError for a non-string, non-array matcher", () => {
     // tests/fixtures/settings/structural-errors/matcher-not-string.json
@@ -431,6 +810,7 @@ describe("buildLintContext", () => {
       ],
       REAL_SPEC,
       UNDETERMINED,
+      REPO_ROOT,
     );
     expect(ctx.groups).toHaveLength(2);
   });
@@ -526,4 +906,41 @@ describe("lint report rendering: json and github", () => {
       expect(output).toContain("::notice");
     });
   });
+});
+
+describe("every rule's own clean fixture, run under the full registry", () => {
+  // Each `describe("<rule-id>", ...)` block above only ever runs its own
+  // rule against its own clean fixture — a fixture clean for that one rule
+  // can still trip a different rule entirely once every rule in LINT_RULES
+  // runs over the same fixture (a command-not-found finding from a matcher
+  // rule's own fixture, for example). PATH and HOME come from the real
+  // process environment, not an empty stub: `unquoted-var`'s own clean
+  // fixture resolves its bare "rm" against a real PATH entry, the same way
+  // a real lint run would.
+  const env = {
+    PATH: process.env["PATH"] ?? "",
+    HOME: process.env["HOME"] ?? "",
+  };
+
+  it.each([...RULE_IDS, ...COMMAND_RULE_IDS])(
+    "%s's clean fixture reports zero findings from every registered rule, not just its own",
+    (ruleId) => {
+      const source = ruleFixtureSource(ruleId, "clean.json");
+      // NOTATION_SATISFIED_VERSION, not UNDETERMINED: matcher-is-array's
+      // own clean fixture ("Edit,Write") is a comma-separated matcher, and
+      // matcher-comma-version's own "degrades to an unknown-confidence
+      // finding ... when the version is undetermined" behavior (tested
+      // above) is deliberate, pre-existing, and not what this test exists
+      // to check — this test is only about the six command rules never
+      // false-positiving across every rule's own fixture.
+      const ctx = buildLintContext(
+        [source],
+        REAL_SPEC,
+        NOTATION_SATISFIED_VERSION,
+        path.dirname(source.path),
+        env,
+      );
+      expect(LINT_RULES.flatMap((rule) => rule.run(ctx))).toEqual([]);
+    },
+  );
 });

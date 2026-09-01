@@ -39,6 +39,14 @@ const NO_SUCH_DIR = path.join(FIXTURES_DIR, "no-such-directory");
 const LINT_VIOLATING_FIXTURE = fileURLToPath(
   new URL("./fixtures/lint/matcher-is-array/violating.json", import.meta.url),
 );
+/** Declares a single bare-word command (`hookassert-test-tool`), resolvable only via a caller-supplied `PATH`. */
+const LINT_PATH_FIXTURE = fileURLToPath(
+  new URL("./fixtures/cli/lint-path/settings.json", import.meta.url),
+);
+/** The directory `LINT_PATH_FIXTURE`'s own command actually lives in. */
+const LINT_PATH_BIN_DIR = fileURLToPath(
+  new URL("./fixtures/cli/lint-path/bin/", import.meta.url),
+);
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 /** The shipped spec's own declared range, from `spec/claude-code-2.1.251-2.2.0.json`. */
@@ -470,6 +478,25 @@ describe("runCli lint", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("Findings: none");
+  });
+
+  it("resolves a bare-word command against CliDeps.env's PATH rather than the host process's own PATH", async () => {
+    const withoutTool = await runCli(
+      ["lint", "--settings", LINT_PATH_FIXTURE],
+      "hookassert",
+      explainDeps({ env: {} }),
+    );
+    expect(withoutTool.exitCode).toBe(1);
+    expect(withoutTool.stdout).toContain("command-not-found");
+    expect(withoutTool.stdout).toContain("hookassert-test-tool");
+
+    const withTool = await runCli(
+      ["lint", "--settings", LINT_PATH_FIXTURE],
+      "hookassert",
+      explainDeps({ env: { PATH: LINT_PATH_BIN_DIR } }),
+    );
+    expect(withTool.exitCode).toBe(0);
+    expect(withTool.stdout).not.toContain("command-not-found");
   });
 
   it("exits 1 and reports a Finding for a settings file with a lint violation", async () => {
