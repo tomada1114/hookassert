@@ -30,6 +30,7 @@ const NO_SUCH_DIR = path.join(FIXTURES_DIR, "no-such-directory");
 const LINT_VIOLATING_FIXTURE = fileURLToPath(
   new URL("./fixtures/lint/matcher-is-array/violating.json", import.meta.url),
 );
+const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 /** The shipped spec's own declared range, from `spec/claude-code-2.1.251-2.2.0.json`. */
 const SPEC_RANGE = ">=2.1.251 <2.2.0";
@@ -550,18 +551,71 @@ describe("runCli lint", () => {
     expect(result.stderr).toContain("ERR_SETTINGS_NOT_FOUND");
   });
 
-  it.each(["json", "github"])(
-    "rejects --format %s as not implemented yet",
-    async (format) => {
-      const result = await runCli(
-        ["lint", "--format", format],
-        "hookassert",
-        explainDeps(),
-      );
+  it.each(["json", "github"])("selects the %s reporter", async (format) => {
+    const result = await runCli(
+      ["lint", "--format", format],
+      "hookassert",
+      explainDeps(),
+    );
 
-      expect(result.exitCode).toBe(4);
-      expect(result.stderr).toContain("ERR_USAGE");
-      expect(result.stderr).toContain(format);
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+  });
+
+  it("--format json carries every finding field for a settings file with a violation", async () => {
+    const result = await runCli(
+      ["lint", "--settings", LINT_VIOLATING_FIXTURE, "--format", "json"],
+      "hookassert",
+      explainDeps(),
+    );
+
+    expect(result.exitCode).toBe(1);
+    const parsed = JSON.parse(result.stdout) as {
+      readonly reportType: string;
+      readonly findings: readonly {
+        readonly file: string;
+        readonly line: number;
+        readonly ruleId: string;
+        readonly message: string;
+        readonly suggestion: string;
+      }[];
+    };
+    expect(parsed.reportType).toBe("lint");
+    const finding = parsed.findings.find((f) => f.ruleId === "matcher-is-array");
+    expect(finding?.file).toBe(LINT_VIOLATING_FIXTURE);
+    expect(finding?.line).toBe(5);
+    expect(finding?.message.length).toBeGreaterThan(0);
+    expect(finding?.suggestion.length).toBeGreaterThan(0);
+  });
+
+  it("--format github emits one ::error line per finding with a repository-relative path", async () => {
+    const result = await runCli(
+      ["lint", "--settings", LINT_VIOLATING_FIXTURE, "--format", "github"],
+      "hookassert",
+      explainDeps({ cwd: REPO_ROOT }),
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toContain(
+      "::error file=tests/fixtures/lint/matcher-is-array/violating.json,line=5," +
+        "title=matcher-is-array::",
+    );
+    // The relative path form only — the absolute fixture path must not leak
+    // into a github annotation meant to attach to a line in the PR diff.
+    expect(result.stdout).not.toContain(LINT_VIOLATING_FIXTURE);
+  });
+
+  it.each(["json", "github"])(
+    "--format %s performs exactly zero spawns even when findings are reported",
+    async (format) => {
+      const spawner = new CountingSpawner();
+      const result = await runCli(
+        ["lint", "--settings", LINT_VIOLATING_FIXTURE, "--format", format],
+        "hookassert",
+        explainDeps({ spawner }),
+      );
+      expect(result.exitCode).toBe(1);
+      expect(spawner.calls).toHaveLength(0);
     },
   );
 

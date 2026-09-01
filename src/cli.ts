@@ -49,6 +49,8 @@ import {
   renderGithub,
   renderInFormat,
   renderJson,
+  renderLintGithub,
+  renderLintJson,
   renderLintPretty,
   renderPretty,
   renderTestGithub,
@@ -470,15 +472,16 @@ const LINT_OPTIONS = {
  * `--ci` branch here the way `resolveTestExitCode` has one.
  *
  * @remarks
- * `--format json`/`--format github` are validated as recognized formats but
- * rejected as not-yet-implemented for `lint`: wiring a `Finding` through
- * those two reporters is a later issue's own scope — see
- * `report/lintReport.ts`'s own remark. Only `pretty` (the default) actually
- * renders here.
+ * `--format` selects among `pretty`/`json`/`github` through the same
+ * `renderInFormat` selector `explain`/`test` already use — `renderLintGithub`
+ * takes `deps.cwd` as its workspace root, exactly as `runTest` passes
+ * `deps.cwd` to `renderTestGithub`, so a `Finding.file` (always absolute)
+ * renders relative to the repository checkout rather than as a raw
+ * absolute path.
  *
  * @throws {UsageError} an option was malformed, a positional argument was
- * given, `--format` named an unrecognized or not-yet-implemented format, or
- * `--claude-version` was not a valid `major.minor.patch` version.
+ * given, `--format` named an unrecognized format, or `--claude-version` was
+ * not a valid `major.minor.patch` version.
  * (Also propagates every load-time error `loadSpecFile` can throw, and
  * `SettingsNotFoundError` for a named `--settings` file that does not
  * exist.)
@@ -508,11 +511,6 @@ function runLint(args: readonly string[], deps: CliDeps): CliResult {
     throw new UsageError(
       `unrecognized --format ${JSON.stringify(parsed.values.format)}. ` +
         `Expected one of: pretty, json, github.`,
-    );
-  }
-  if (parsed.values.format === "json" || parsed.values.format === "github") {
-    throw new UsageError(
-      `the --format ${parsed.values.format} for lint is not implemented yet.`,
     );
   }
 
@@ -545,7 +543,11 @@ function runLint(args: readonly string[], deps: CliDeps): CliResult {
     findings,
   };
 
-  const stdout = renderLintPretty(report);
+  const stdout = renderInFormat(report, parsed.values.format, {
+    pretty: renderLintPretty,
+    json: renderLintJson,
+    github: (r: LintReport) => renderLintGithub(r, deps.cwd),
+  });
 
   return { exitCode: findings.length > 0 ? 1 : 0, stdout, stderr: "" };
 }

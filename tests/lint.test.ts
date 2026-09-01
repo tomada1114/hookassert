@@ -11,6 +11,13 @@ import {
 } from "../src/internal/lint/index.js";
 import type { LintContext, LintRule } from "../src/internal/lint/index.js";
 import type { VersionContext } from "../src/internal/matcher/index.js";
+import {
+  buildReportHeader,
+  renderLintGithub,
+  renderLintJson,
+  toJsonLintReport,
+  type LintReport,
+} from "../src/internal/report/index.js";
 import type { SettingsSource } from "../src/internal/settings/index.js";
 import { loadSpecFile, parseClaudeVersion } from "../src/internal/spec/index.js";
 import type { Spec } from "../src/internal/spec/index.js";
@@ -309,5 +316,97 @@ describe("buildLintContext", () => {
       UNDETERMINED,
     );
     expect(ctx.groups).toHaveLength(2);
+  });
+});
+
+describe("lint report rendering: json and github", () => {
+  function reportFor(
+    source: SettingsSource,
+    versionContext: VersionContext = UNDETERMINED,
+  ): LintReport {
+    const ctx = contextFor(source, versionContext);
+    const findings = LINT_RULES.flatMap((rule) => rule.run(ctx));
+    return {
+      header: buildReportHeader(versionContext, REAL_SPEC.claudeCodeRange),
+      findings,
+    };
+  }
+
+  const violatingSource = ruleFixtureSource("matcher-is-array", "violating.json");
+
+  describe("renderLintJson / toJsonLintReport", () => {
+    it("tags the report as reportType 'lint'", () => {
+      const json = toJsonLintReport(reportFor(violatingSource));
+      expect(json.reportType).toBe("lint");
+      expect(json.reportVersion).toBe("1");
+    });
+
+    it("carries every Finding field for each finding, unmodified", () => {
+      const report = reportFor(violatingSource);
+      const json = toJsonLintReport(report);
+
+      expect(json.findings).toHaveLength(report.findings.length);
+      json.findings.forEach((jsonFinding, index) => {
+        const finding = report.findings[index];
+        expect(jsonFinding).toEqual({
+          file: finding?.file,
+          line: finding?.line,
+          ruleId: finding?.ruleId,
+          message: finding?.message,
+          suggestion: finding?.suggestion,
+        });
+      });
+    });
+
+    it("renderLintJson stringifies exactly toJsonLintReport's own shape", () => {
+      const report = reportFor(violatingSource);
+      expect(JSON.parse(renderLintJson(report)) as unknown).toEqual(
+        toJsonLintReport(report),
+      );
+    });
+
+    it("carries an empty findings array, not an omitted one, when there is nothing to report", () => {
+      // matcher-dead's own clean.json ("Bash") is clean across every rule,
+      // unlike matcher-is-array's own clean.json ("Edit,Write"), which is
+      // clean only for matcher-is-array itself and still trips
+      // matcher-comma-version under an undetermined version.
+      const cleanSource = ruleFixtureSource("matcher-dead", "clean.json");
+      const json = toJsonLintReport(reportFor(cleanSource));
+      expect(json.findings).toEqual([]);
+    });
+  });
+
+  describe("renderLintGithub", () => {
+    it("emits one ::error line per finding, with a workspace-relative path", () => {
+      const report = reportFor(violatingSource);
+      const output = renderLintGithub(report, REPO_ROOT);
+
+      const relativePath = path
+        .relative(REPO_ROOT, violatingSource.path)
+        .split(path.sep)
+        .join("/");
+      expect(output).toContain(
+        `::error file=${relativePath},line=5,title=matcher-is-array::`,
+      );
+      // The absolute path must never leak into a github annotation.
+      expect(output).not.toContain(violatingSource.path);
+    });
+
+    it("folds the suggestion into the message body rather than dropping it", () => {
+      const report = reportFor(violatingSource);
+      const [finding] = report.findings;
+      const output = renderLintGithub(report, REPO_ROOT);
+
+      expect(finding).toBeDefined();
+      expect(output).toContain(finding?.suggestion ?? "");
+    });
+
+    it("emits only the header line, no ::error, for a clean report", () => {
+      const cleanSource = ruleFixtureSource("matcher-dead", "clean.json");
+      const output = renderLintGithub(reportFor(cleanSource), REPO_ROOT);
+
+      expect(output).not.toContain("::error");
+      expect(output).toContain("::notice");
+    });
   });
 });
