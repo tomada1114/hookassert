@@ -29,7 +29,13 @@ hookassert --help
   every matcher that did not fire printed with the reason. It never spawns a process —
   the Claude Code version it runs against comes only from `--claude-version` or the
   `HOOKASSERT_CLAUDE_VERSION` environment variable, falling back to `"undetermined"`.
-- `hookassert lint` checks hook declarations for matcher and command mistakes.
+- `hookassert lint` is a zero-execution static check over your settings tree: it never
+  spawns a process or writes a file, and reports every matcher mistake it finds as a
+  `Finding` — a dead exact-match item, a case mismatch, an unanchored regex that
+  over-matches, and a comma- or hyphen-notation matcher used against a Claude Code
+  version that cannot be confirmed to support it. Exits `1` when it finds anything, `0`
+  when it finds nothing. `--claude-version`, `--settings` and `--format`
+  (`pretty`/`json`/`github`) mean exactly what they do for `explain`.
 - `hookassert record` captures real hook payloads from a Claude Code session.
 - `hookassert test <fixture>...` replays one or more fixture files against your merged
   settings, runs the hooks that actually fire, and asserts what happened against each
@@ -47,8 +53,8 @@ hookassert --help
   `unknown` either), `1` when at least one fails, and `3` when there are no failures but
   `--ci` was given and at least one case is `unknown`.
 
-`lint` and `record` have no behavior yet: each currently exits `4` with `ERR_USAGE`, so
-a script that wires one up fails loudly instead of silently reporting success.
+`record` alone has no behavior yet: it currently exits `4` with `ERR_USAGE`, so a script
+that wires it up fails loudly instead of silently reporting success.
 
 ## API
 

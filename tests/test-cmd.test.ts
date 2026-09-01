@@ -671,7 +671,7 @@ describe("machine guarantees", () => {
     expect(report.cases[0]?.result.kind).toBe("pass");
   });
 
-  it("explain and lint (already covered by earlier issues) remain at 0 spawns when run alongside test in the same CLI process", async () => {
+  it("explain and lint (both zero-execution static checks) remain at 0 spawns when run alongside test in the same CLI process", async () => {
     const spawner = new FakeSpawner();
     const deps = testDeps({ spawner });
 
@@ -683,8 +683,11 @@ describe("machine guarantees", () => {
     expect(explainResult.exitCode).toBe(0);
     expect(spawner.calls).toHaveLength(0);
 
+    // Exit 0: this shared project's own settings.json (see beforeAll above)
+    // declares only correctly-cased, known-tool matchers ("Bash", "Write",
+    // "Edit"), so none of the five matcher rules has anything to report.
     const lintResult = await runCli(["lint"], "hookassert", deps);
-    expect(lintResult.exitCode).toBe(4);
+    expect(lintResult.exitCode).toBe(0);
     expect(spawner.calls).toHaveLength(0);
 
     const fixturePath = writeFixture({

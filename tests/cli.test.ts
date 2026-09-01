@@ -27,6 +27,10 @@ const EXPLICIT_SETTINGS_FILE = path.join(FIXTURES_DIR, "explicit-settings.json")
 // Never created on disk: loadSourceHooks treats a missing settings file as
 // contributing zero hooks, so this is how a test opts a layer out entirely.
 const NO_SUCH_DIR = path.join(FIXTURES_DIR, "no-such-directory");
+const LINT_VIOLATING_FIXTURE = fileURLToPath(
+  new URL("./fixtures/lint/matcher-is-array/violating.json", import.meta.url),
+);
+const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 /** The shipped spec's own declared range, from `spec/claude-code-2.1.251-2.2.0.json`. */
 const SPEC_RANGE = ">=2.1.251 <2.2.0";
@@ -63,8 +67,8 @@ function explainDefaultSpecPath(): string {
 /** The commands hookassert will ship, in the order the usage text lists them. */
 const SUBCOMMANDS = ["explain", "lint", "record", "test"] as const;
 
-/** The commands with no behavior yet — `explain` and `test` are both real now. */
-const STUB_SUBCOMMANDS = ["lint", "record"] as const;
+/** The commands with no behavior yet — `explain`, `lint`, and `test` are all real now. */
+const STUB_SUBCOMMANDS = ["record"] as const;
 
 /** The `ERR_` shape AGENTS.md fixes for every published error code. */
 const ERROR_CODE = /^ERR_[A-Z0-9_]+$/;
@@ -462,6 +466,223 @@ describe("runCli explain", () => {
         explainDeps(),
       ),
     ).rejects.toThrow(/EISDIR/);
+  });
+});
+
+describe("runCli lint", () => {
+  it("wires settings + spec + rules and exits 0 with zero findings for a clean project", async () => {
+    const result = await runCli(["lint"], "hookassert", explainDeps());
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Findings: none");
+  });
+
+  it("exits 1 and reports a Finding for a settings file with a lint violation", async () => {
+    const result = await runCli(
+      ["lint", "--settings", LINT_VIOLATING_FIXTURE],
+      "hookassert",
+      explainDeps(),
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toContain("matcher-is-array");
+    expect(result.stdout).toContain(LINT_VIOLATING_FIXTURE);
+  });
+
+  it("accepts --ci and behaves identically to a plain run", async () => {
+    const plain = await runCli(["lint"], "hookassert", explainDeps());
+    const withCi = await runCli(["lint", "--ci"], "hookassert", explainDeps());
+
+    expect(withCi.exitCode).toBe(plain.exitCode);
+    expect(withCi.stdout).toBe(plain.stdout);
+    expect(withCi.stderr).toBe(plain.stderr);
+  });
+
+  it("accepts --ci alongside a violation the same way a plain run does", async () => {
+    const plain = await runCli(
+      ["lint", "--settings", LINT_VIOLATING_FIXTURE],
+      "hookassert",
+      explainDeps(),
+    );
+    const withCi = await runCli(
+      ["lint", "--ci", "--settings", LINT_VIOLATING_FIXTURE],
+      "hookassert",
+      explainDeps(),
+    );
+
+    expect(withCi.exitCode).toBe(plain.exitCode);
+    expect(withCi.stdout).toBe(plain.stdout);
+  });
+
+  it("always prints the spec's declared claudeCodeRange", async () => {
+    const result = await runCli(["lint"], "hookassert", explainDeps());
+
+    expect(result.stdout).toContain(`Spec range: ${SPEC_RANGE}`);
+  });
+
+  it("prints 'undetermined' when no Claude Code version can be resolved", async () => {
+    const result = await runCli(["lint"], "hookassert", explainDeps());
+
+    expect(result.stdout).toContain("Claude Code version: undetermined");
+  });
+
+  it("resolves --claude-version the same way explain does", async () => {
+    const result = await runCli(
+      ["lint", "--claude-version", "2.1.300"],
+      "hookassert",
+      explainDeps(),
+    );
+
+    expect(result.stdout).toContain("Claude Code version: 2.1.300");
+  });
+
+  it("exits 4 with ERR_USAGE when lint is given an unrecognized option", async () => {
+    const result = await runCli(["lint", "--bogus"], "hookassert", explainDeps());
+
+    expect(result.exitCode).toBe(4);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("ERR_USAGE");
+  });
+
+  it("exits 4 with ERR_USAGE on a positional argument", async () => {
+    const result = await runCli(["lint", "stray"], "hookassert", explainDeps());
+
+    expect(result.exitCode).toBe(4);
+    expect(result.stderr).toContain("ERR_USAGE");
+    expect(result.stderr).toContain("stray");
+  });
+
+  it("exits 4 with ERR_USAGE when --claude-version is not major.minor.patch", async () => {
+    const result = await runCli(
+      ["lint", "--claude-version", "not-a-version"],
+      "hookassert",
+      explainDeps(),
+    );
+
+    expect(result.exitCode).toBe(4);
+    expect(result.stderr).toContain("ERR_USAGE");
+  });
+
+  it("exits 5 with ERR_SETTINGS_NOT_FOUND when an explicit --settings file does not exist", async () => {
+    const missing = path.join(FIXTURES_DIR, "no-such-settings-file.json");
+    const result = await runCli(
+      ["lint", "--settings", missing],
+      "hookassert",
+      explainDeps(),
+    );
+
+    expect(result.exitCode).toBe(5);
+    expect(result.stderr).toContain("ERR_SETTINGS_NOT_FOUND");
+  });
+
+  it.each(["json", "github"])("selects the %s reporter", async (format) => {
+    const result = await runCli(
+      ["lint", "--format", format],
+      "hookassert",
+      explainDeps(),
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+  });
+
+  it("--format json carries every finding field for a settings file with a violation", async () => {
+    const result = await runCli(
+      ["lint", "--settings", LINT_VIOLATING_FIXTURE, "--format", "json"],
+      "hookassert",
+      explainDeps(),
+    );
+
+    expect(result.exitCode).toBe(1);
+    const parsed = JSON.parse(result.stdout) as {
+      readonly reportType: string;
+      readonly findings: readonly {
+        readonly file: string;
+        readonly line: number;
+        readonly ruleId: string;
+        readonly message: string;
+        readonly suggestion: string;
+      }[];
+    };
+    expect(parsed.reportType).toBe("lint");
+    const finding = parsed.findings.find((f) => f.ruleId === "matcher-is-array");
+    expect(finding?.file).toBe(LINT_VIOLATING_FIXTURE);
+    expect(finding?.line).toBe(5);
+    expect(finding?.message.length).toBeGreaterThan(0);
+    expect(finding?.suggestion.length).toBeGreaterThan(0);
+  });
+
+  it("--format github emits one ::error line per finding with a repository-relative path", async () => {
+    const result = await runCli(
+      ["lint", "--settings", LINT_VIOLATING_FIXTURE, "--format", "github"],
+      "hookassert",
+      explainDeps({ cwd: REPO_ROOT }),
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toContain(
+      "::error file=tests/fixtures/lint/matcher-is-array/violating.json,line=5," +
+        "title=matcher-is-array::",
+    );
+    // The relative path form only — the absolute fixture path must not leak
+    // into a github annotation meant to attach to a line in the PR diff.
+    expect(result.stdout).not.toContain(LINT_VIOLATING_FIXTURE);
+  });
+
+  it.each(["json", "github"])(
+    "--format %s performs exactly zero spawns even when findings are reported",
+    async (format) => {
+      const spawner = new CountingSpawner();
+      const result = await runCli(
+        ["lint", "--settings", LINT_VIOLATING_FIXTURE, "--format", format],
+        "hookassert",
+        explainDeps({ spawner }),
+      );
+      expect(result.exitCode).toBe(1);
+      expect(spawner.calls).toHaveLength(0);
+    },
+  );
+
+  it("accepts --format pretty explicitly", async () => {
+    const result = await runCli(
+      ["lint", "--format", "pretty"],
+      "hookassert",
+      explainDeps(),
+    );
+
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("exits 4 with ERR_USAGE on an unrecognized --format", async () => {
+    const result = await runCli(
+      ["lint", "--format", "yaml"],
+      "hookassert",
+      explainDeps(),
+    );
+
+    expect(result.exitCode).toBe(4);
+    expect(result.stderr).toContain("ERR_USAGE");
+  });
+
+  it("performs exactly zero spawns", async () => {
+    const spawner = new CountingSpawner();
+    const result = await runCli(["lint"], "hookassert", explainDeps({ spawner }));
+
+    expect(result.exitCode).toBe(0);
+    expect(spawner.calls).toHaveLength(0);
+  });
+
+  it("performs exactly zero spawns even when findings are reported", async () => {
+    const spawner = new CountingSpawner();
+    const result = await runCli(
+      ["lint", "--settings", LINT_VIOLATING_FIXTURE],
+      "hookassert",
+      explainDeps({ spawner }),
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(spawner.calls).toHaveLength(0);
   });
 });
 
