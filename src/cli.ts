@@ -27,6 +27,7 @@ import {
   NodeVersionProbe,
   type ExecDeps,
   type ExecutionPlan,
+  type ExecutionResult,
   type ExecutionStep,
 } from "./internal/exec/index.js";
 import { NodeSpawner, type Spawner } from "./internal/exec/spawner.js";
@@ -37,6 +38,7 @@ import {
   type FixtureFile,
   type FixtureSet,
 } from "./internal/fixture/index.js";
+import { buildLintContext, LINT_RULES } from "./internal/lint/index.js";
 import {
   matchHooks,
   type MatcherOutcome,
@@ -48,11 +50,15 @@ import {
   renderGithub,
   renderInFormat,
   renderJson,
+  renderLintGithub,
+  renderLintJson,
+  renderLintPretty,
   renderPretty,
   renderTestGithub,
   renderTestJson,
   renderTestPretty,
   type ExplainReport,
+  type LintReport,
   type TestCaseReport,
   type TestReport,
 } from "./internal/report/index.js";
@@ -95,8 +101,8 @@ const SPEC_PATH = fileURLToPath(
  * usage text.
  *
  * @remarks
- * `explain` and `test` have real behavior; `lint` and `record` are still
- * stubs. Naming all four here anyway is what makes the usage text and the
+ * `explain`, `lint`, and `test` have real behavior; `record` is still a
+ * stub. Naming all four here anyway is what makes the usage text and the
  * "unknown command" message agree with each other, and with the routing that
  * replaces each stub once its own issue lands.
  */
@@ -448,6 +454,107 @@ function runExplain(args: readonly string[], deps: CliDeps): CliResult {
   });
 
   return { exitCode: 0, stdout, stderr: "" };
+}
+
+/**
+ * `lint`'s own option table: `common` plus `--ci`, accepted and ignored —
+ * `lint` has no `<event>`/`[tool]` positionals.
+ */
+const LINT_OPTIONS = {
+  settings: { type: "string", multiple: true },
+  "claude-version": { type: "string" },
+  format: { type: "string" },
+  ci: { type: "boolean" },
+  help: { type: "boolean", short: "h" },
+} as const;
+
+/**
+ * `lint` is a zero-execution static check: it discovers settings the same
+ * way `explain` does, runs every registered `LintRule` over them, and exits
+ * `1` when any `Finding` was produced, `0` otherwise. `--ci` behaves
+ * identically to a plain run — lint findings are binary (found or not),
+ * unlike `test`'s three-way pass/fail/unknown, so there is no separate
+ * `--ci` branch here the way `resolveTestExitCode` has one.
+ *
+ * @remarks
+ * `--format` selects among `pretty`/`json`/`github` through the same
+ * `renderInFormat` selector `explain`/`test` already use — `renderLintGithub`
+ * takes `deps.cwd` as its workspace root, exactly as `runTest` passes
+ * `deps.cwd` to `renderTestGithub`, so a `Finding.file` (always absolute)
+ * renders relative to the repository checkout rather than as a raw
+ * absolute path.
+ *
+ * @throws {UsageError} an option was malformed, a positional argument was
+ * given, `--format` named an unrecognized format, or `--claude-version` was
+ * not a valid `major.minor.patch` version.
+ * (Also propagates every load-time error `loadSpecFile` can throw, and
+ * `SettingsNotFoundError` for a named `--settings` file that does not
+ * exist.)
+ */
+function runLint(args: readonly string[], deps: CliDeps): CliResult {
+  let parsed;
+  try {
+    parsed = parseArgs({
+      args,
+      strict: true,
+      allowPositionals: true,
+      options: LINT_OPTIONS,
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new UsageError(`invalid options for lint: ${reason}`);
+  }
+
+  if (parsed.positionals.length > 0) {
+    throw new UsageError(
+      `lint accepts no positional arguments; got ${JSON.stringify(parsed.positionals[0])}.`,
+    );
+  }
+
+  // Validated here, before any I/O, per the same rule runExplain follows.
+  if (parsed.values.format !== undefined && !isReportFormat(parsed.values.format)) {
+    throw new UsageError(
+      `unrecognized --format ${JSON.stringify(parsed.values.format)}. ` +
+        `Expected one of: pretty, json, github.`,
+    );
+  }
+
+  const versionContext = resolveVersionContext(
+    parsed.values["claude-version"],
+    deps.env,
+  );
+  const spec = loadSpecFile(deps.specPath);
+
+  const explicitSettings = parsed.values.settings;
+  // Same rationale as runExplain: a settings file the caller named
+  // explicitly is an assertion it exists, unlike a discovered layer.
+  for (const file of explicitSettings ?? []) {
+    const resolved = path.resolve(deps.cwd, file);
+    if (!existsSync(resolved)) {
+      throw new SettingsNotFoundError(resolved);
+    }
+  }
+  const sources = discoverSources({
+    cwd: deps.cwd,
+    home: deps.home,
+    ...(explicitSettings === undefined ? {} : { explicit: explicitSettings }),
+  });
+
+  const ctx = buildLintContext(sources, spec, versionContext);
+  const findings = LINT_RULES.flatMap((rule) => rule.run(ctx));
+
+  const report: LintReport = {
+    header: buildReportHeader(versionContext, spec.claudeCodeRange),
+    findings,
+  };
+
+  const stdout = renderInFormat(report, parsed.values.format, {
+    pretty: renderLintPretty,
+    json: renderLintJson,
+    github: (r: LintReport) => renderLintGithub(r, deps.cwd),
+  });
+
+  return { exitCode: findings.length > 0 ? 1 : 0, stdout, stderr: "" };
 }
 
 /** `test`'s own option table: `common` plus consent, timing, and execution controls. */
@@ -943,15 +1050,21 @@ async function runTest(args: readonly string[], deps: CliDeps): Promise<CliResul
     spawnWorthy,
   );
 
-  const executed = await Promise.all(
-    filePlans.map((plan) => {
-      const executionPlan: ExecutionPlan = {
-        steps: plan.steps,
-        assertedEvents: plan.assertedEvents,
-      };
-      return executeHooks(plan.execDeps, executionPlan);
-    }),
-  );
+  // Sequential, not `Promise.all`: each `executeHooks` call runs its own
+  // concurrency-capped worker pool (see `executor.ts`'s
+  // `HOOKASSERT_DEFAULT_CONCURRENCY`), so running the files in parallel here
+  // would let N fixture files spawn N independent pools at once — the exact
+  // fan-out issue #40 caps against. A `for…of` with `await` keeps at most one
+  // pool in flight per run while preserving the per-file result order the
+  // rest of `runTest` relies on.
+  const executed: (readonly ExecutionResult[])[] = [];
+  for (const plan of filePlans) {
+    const executionPlan: ExecutionPlan = {
+      steps: plan.steps,
+      assertedEvents: plan.assertedEvents,
+    };
+    executed.push(await executeHooks(plan.execDeps, executionPlan));
+  }
 
   const outcomesByStep = new Map<ExecutionStep, ExecOutcome>();
   for (const results of executed) {
@@ -1048,9 +1161,10 @@ export async function runCli(
     switch (subcommand) {
       case "explain":
         return runExplain(rest, resolveDeps(deps));
+      case "lint":
+        return runLint(rest, resolveDeps(deps));
       case "test":
         return await runTest(rest, resolveDeps(deps));
-      case "lint":
       case "record":
         // A recognised command with no implementation behind it is still a
         // usage error: fabricating partial behavior would make the gap
