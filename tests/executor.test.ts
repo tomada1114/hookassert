@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   buildHookEnv,
   executeHooks,
+  HOOKASSERT_DEFAULT_CONCURRENCY,
   HOOKASSERT_DEFAULT_TIMEOUT_MS,
   isCredentialShapedEnvKey,
   NodeSpawner,
@@ -120,6 +121,9 @@ function makeDeps(overrides: Partial<ExecDeps> = {}): ExecDeps {
     ...(overrides.explicitDefaultTimeoutMs === undefined
       ? {}
       : { explicitDefaultTimeoutMs: overrides.explicitDefaultTimeoutMs }),
+    ...(overrides.concurrency === undefined
+      ? {}
+      : { concurrency: overrides.concurrency }),
   };
 }
 
@@ -465,6 +469,147 @@ describe("stub bypass", () => {
     expect(spawner.calls.every((call) => call.command !== "stubbed-command")).toBe(
       true,
     );
+  });
+});
+
+describe("concurrency cap", () => {
+  /**
+   * A `Spawner` whose calls stay pending until manually released, and which
+   * records the maximum number of calls in flight at once — the fact this
+   * describe block relies on to prove `executeHooks`' cap actually holds
+   * during the run, not only trusting the implementation to enforce it.
+   */
+  class GatedSpawner implements Spawner {
+    readonly calls: SpawnRequest[] = [];
+    readonly #pending: (() => void)[] = [];
+    #current = 0;
+    maxObserved = 0;
+
+    spawn(req: SpawnRequest): Promise<ExecOutcome> {
+      this.calls.push(req);
+      this.#current += 1;
+      this.maxObserved = Math.max(this.maxObserved, this.#current);
+      return new Promise((resolve) => {
+        this.#pending.push(() => {
+          this.#current -= 1;
+          resolve({ exitCode: 0, stdout: "", stderr: "", timedOut: false });
+        });
+      });
+    }
+
+    get current(): number {
+      return this.#current;
+    }
+
+    /** Resolves every call currently pending, letting its worker move on. */
+    releasePending(): void {
+      const toRelease = this.#pending.splice(0, this.#pending.length);
+      for (const resolveOne of toRelease) {
+        resolveOne();
+      }
+    }
+  }
+
+  /**
+   * Yields the microtask queue enough times for one released spawn's
+   * continuation chain (the spawn's own promise, then `runStep`'s adopted
+   * promise, then the per-step callback's `await`, then the worker's
+   * `await`) to reach the next synchronous dispatch — no real timer
+   * involved, since nothing here is waiting on wall-clock time.
+   */
+  async function flushMicrotasks(): Promise<void> {
+    for (let i = 0; i < 20; i++) {
+      await Promise.resolve();
+    }
+  }
+
+  it("never runs more than `concurrency` steps at once, still runs every step, and preserves each result's step pairing", async () => {
+    const spawner = new GatedSpawner();
+    const hooks = Array.from({ length: 7 }, (_, index) =>
+      makeHook({ command: `step-${String(index)}` }),
+    );
+    const steps = hooks.map((hook) => makeStep(hook));
+    const deps = makeDeps({ spawner, concurrency: 3 });
+
+    const resultPromise = executeHooks(deps, makePlan(steps));
+
+    // executeHooks' worker pool dispatches its first round synchronously:
+    // each of the 3 workers runs up to its own first await (the pending
+    // spawn call) before control returns here, so exactly `concurrency`
+    // calls have already started — no microtask flush needed yet.
+    expect(spawner.calls).toHaveLength(3);
+    expect(spawner.current).toBe(3);
+
+    while (spawner.calls.length < steps.length) {
+      spawner.releasePending();
+      await flushMicrotasks();
+    }
+    spawner.releasePending();
+    await flushMicrotasks();
+
+    const results = await resultPromise;
+
+    expect(spawner.calls).toHaveLength(7);
+    expect(spawner.current).toBe(0);
+    // The cap held for the whole run, not only at the start: this is the
+    // assertion the fix's completion checklist asks for.
+    expect(spawner.maxObserved).toBe(3);
+    expect(results).toHaveLength(7);
+    // Each ExecutionResult still carries its own step, in plan order.
+    expect(results.map((result) => result.step)).toEqual(steps);
+  });
+
+  it("a concurrency below 1 is treated as 1 rather than deadlocking", async () => {
+    const spawner = new CountingSpawner();
+    const hook = makeHook({ command: "echo hi" });
+    const deps = makeDeps({ spawner, concurrency: 0 });
+
+    const outcomes = await executeHooks(deps, makePlan([makeStep(hook)]));
+
+    expect(outcomes).toHaveLength(1);
+    expect(spawner.calls).toHaveLength(1);
+  });
+
+  it("omitting concurrency uses HOOKASSERT_DEFAULT_CONCURRENCY", async () => {
+    const spawner = new CountingSpawner();
+    const hookCount = HOOKASSERT_DEFAULT_CONCURRENCY + 2;
+    const hooks = Array.from({ length: hookCount }, (_, index) =>
+      makeHook({ command: `default-cap-${String(index)}` }),
+    );
+    const deps = makeDeps({ spawner });
+
+    const outcomes = await executeHooks(
+      deps,
+      makePlan(hooks.map((hook) => makeStep(hook))),
+    );
+
+    expect(outcomes).toHaveLength(hookCount);
+    expect(spawner.calls).toHaveLength(hookCount);
+  });
+
+  it("a stubbed step still never reaches the Spawner while the cap is in effect", async () => {
+    const spawner = new CountingSpawner();
+    const stub: FixtureStubEntry = { exitCode: 3 };
+    const hooks = Array.from({ length: 5 }, (_, index) =>
+      makeHook({ command: `mixed-${String(index)}` }),
+    );
+    const steps = hooks.map((hook, index) =>
+      makeStep(hook, index === 2 ? { stub } : {}),
+    );
+    const deps = makeDeps({ spawner, concurrency: 2 });
+
+    const outcomes = await executeHooks(deps, makePlan(steps));
+
+    expect(outcomes).toHaveLength(5);
+    // 5 steps, 1 stubbed: only 4 ever reach the Spawner.
+    expect(spawner.calls).toHaveLength(4);
+    expect(spawner.calls.every((call) => call.command !== "mixed-2")).toBe(true);
+    expect(outcomes[2]?.outcome).toEqual({
+      exitCode: 3,
+      stdout: "",
+      stderr: "",
+      timedOut: false,
+    });
   });
 });
 
