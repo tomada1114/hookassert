@@ -40,6 +40,11 @@ import {
 } from "./internal/fixture/index.js";
 import { buildLintContext, LINT_RULES } from "./internal/lint/index.js";
 import {
+  isRecordSessionActive,
+  startRecordSession,
+  stopRecordSession,
+} from "./internal/record/index.js";
+import {
   matchHooks,
   type MatcherOutcome,
   type VersionContext,
@@ -101,10 +106,9 @@ const SPEC_PATH = fileURLToPath(
  * usage text.
  *
  * @remarks
- * `explain`, `lint`, and `test` have real behavior; `record` is still a
- * stub. Naming all four here anyway is what makes the usage text and the
- * "unknown command" message agree with each other, and with the routing that
- * replaces each stub once its own issue lands.
+ * Every one of the four has real behavior. Naming all four here is what
+ * makes the usage text and the "unknown command" message agree with each
+ * other.
  */
 const COMMANDS = [
   ["explain", "Show which hooks a tool event fires, and why."],
@@ -555,6 +559,156 @@ function runLint(args: readonly string[], deps: CliDeps): CliResult {
   });
 
   return { exitCode: findings.length > 0 ? 1 : 0, stdout, stderr: "" };
+}
+
+/**
+ * `record`'s own option table.
+ *
+ * @remarks
+ * No `settings`/`format`/`ci` here: unlike `explain`/`lint`/`test`, `record`
+ * neither reads the merged settings tree as a firing-set question nor
+ * renders a `Report` — it edits exactly one settings file
+ * (`.claude/settings.local.json`) and prints a short status line. `--stop`
+ * takes no option beyond `--stop` itself; `runRecord` rejects any of the
+ * other three alongside it.
+ */
+const RECORD_OPTIONS = {
+  stop: { type: "boolean" },
+  events: { type: "string" },
+  "capture-dir": { type: "string" },
+  "claude-version": { type: "string" },
+  help: { type: "boolean", short: "h" },
+} as const;
+
+/**
+ * `record` (without `--stop`): insert the capture hook for every requested
+ * event, and report where.
+ *
+ * @throws {UsageError} `--claude-version` was not a valid `major.minor.patch`
+ * string, `--events` named an unrecognized event, or a session is already
+ * active.
+ * (Also propagates every load-time error `loadSpecFile` can throw.)
+ */
+function runRecordStart(
+  parsed: ReturnType<typeof parseArgsForRecord>,
+  deps: CliDeps,
+): CliResult {
+  const claudeVersionFlag = parsed.values["claude-version"];
+  if (claudeVersionFlag !== undefined) {
+    try {
+      parseClaudeVersion(claudeVersionFlag);
+    } catch {
+      throw new UsageError(
+        `--claude-version: "${claudeVersionFlag}" is not a valid major.minor.patch ` +
+          "Claude Code version.",
+      );
+    }
+  }
+
+  if (isRecordSessionActive(deps.cwd)) {
+    throw new UsageError(
+      "a recording session is already active. Run `record --stop` first, or use a " +
+        "different project directory.",
+    );
+  }
+
+  const spec = loadSpecFile(deps.specPath);
+
+  let events: EventName[];
+  const eventsFlag = parsed.values.events;
+  if (eventsFlag === undefined) {
+    events = Object.keys(spec.events).filter(isEventName);
+  } else {
+    const requested = eventsFlag
+      .split(",")
+      .map((name) => name.trim())
+      .filter((name) => name.length > 0);
+    if (requested.length === 0) {
+      throw new UsageError("--events must name at least one event.");
+    }
+    events = requested.map((name) => {
+      if (!isEventName(name)) {
+        throw new UsageError(
+          `unrecognized event ${JSON.stringify(name)} in --events. ` +
+            `Expected one of the documented Claude Code hook events.`,
+        );
+      }
+      return name;
+    });
+  }
+
+  const info = startRecordSession({
+    cwd: deps.cwd,
+    events,
+    matcherForEvent: (event) =>
+      spec.events[event]?.matcherTargets.kind === "none" ? undefined : "*",
+    captureDir: parsed.values["capture-dir"],
+    claudeVersionFlag,
+  });
+
+  const stdout =
+    `Recording started: capture hook inserted into ${info.settingsFile}` +
+    `${info.createdFresh ? " (file created)" : ""}.\n` +
+    `Capturing events: ${info.events.join(", ")}\n` +
+    `Capture directory: ${info.captureDir}\n` +
+    `Run \`hookassert record --stop\` when you are done recording.\n`;
+
+  return { exitCode: 0, stdout, stderr: "" };
+}
+
+/** `parseArgs({strict:true})` result shape for `RECORD_OPTIONS`, named so both halves of `runRecord` can share it. */
+function parseArgsForRecord(args: readonly string[]) {
+  return parseArgs({
+    args,
+    strict: true,
+    allowPositionals: true,
+    options: RECORD_OPTIONS,
+  });
+}
+
+/**
+ * `record`: insert (or, with `--stop`, remove and verify) the capture hook
+ * `record/session.ts` manages.
+ *
+ * @throws {UsageError} an option was malformed, or a positional argument was
+ * given.
+ * (Also propagates every error `runRecordStart`/`stopRecordSession` can
+ * throw — see those functions' own documentation.)
+ */
+function runRecord(args: readonly string[], deps: CliDeps): CliResult {
+  let parsed;
+  try {
+    parsed = parseArgsForRecord(args);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new UsageError(`invalid options for record: ${reason}`);
+  }
+
+  if (parsed.positionals.length > 0) {
+    throw new UsageError(
+      `record accepts no positional arguments; got ${JSON.stringify(parsed.positionals[0])}.`,
+    );
+  }
+
+  if (parsed.values.stop === true) {
+    if (
+      parsed.values.events !== undefined ||
+      parsed.values["capture-dir"] !== undefined ||
+      parsed.values["claude-version"] !== undefined
+    ) {
+      throw new UsageError("record --stop takes no option other than --stop itself.");
+    }
+    const result = stopRecordSession(deps.cwd);
+    return {
+      exitCode: 0,
+      stdout:
+        `Recording stopped: ${result.settingsFile} restored to its pre-recording ` +
+        "state (zero diff).\n",
+      stderr: "",
+    };
+  }
+
+  return runRecordStart(parsed, deps);
 }
 
 /** `test`'s own option table: `common` plus consent, timing, and execution controls. */
@@ -1166,12 +1320,7 @@ export async function runCli(
       case "test":
         return await runTest(rest, resolveDeps(deps));
       case "record":
-        // A recognised command with no implementation behind it is still a
-        // usage error: fabricating partial behavior would make the gap
-        // invisible to the issue that is supposed to close it.
-        throw new UsageError(
-          `the ${JSON.stringify(subcommand)} command is not implemented yet.`,
-        );
+        return runRecord(rest, resolveDeps(deps));
     }
   } catch (error) {
     if (error instanceof HookassertError) {

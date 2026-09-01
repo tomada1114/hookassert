@@ -14,6 +14,13 @@ import type { ResolvedSettings, SettingsSource } from "./types.js";
 
 export { discoverSources } from "./discover.js";
 export type { DiscoverSettingsOptions } from "./discover.js";
+export { insertCaptureHook, removeCaptureHook } from "./edit.js";
+export type {
+  CaptureAnchors,
+  CaptureEdit,
+  CaptureHookEntry,
+  CapturePlan,
+} from "./edit.js";
 export { loadSourceHooks } from "./load.js";
 export { hooksForEvent, mergeSources } from "./merge.js";
 export type {

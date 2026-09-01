@@ -341,3 +341,42 @@ export class FixtureUnblockableDecisionError extends HookassertError {
     this.decision = decision;
   }
 }
+
+/**
+ * Thrown when `record --stop` cannot restore the settings file it edited with
+ * the "zero diff" guarantee the design promises.
+ *
+ * @remarks
+ * Covers both ways that guarantee can fail: `--stop` given with no active
+ * session to restore (no session file, or one naming a settings file that no
+ * longer matches), and a session whose settings file was edited by hand while
+ * recording was active. In the second case the inverse edit (removing the
+ * capture hook) is still applied before this is thrown — see `record/session.ts`'s
+ * `stopRecordSession` — so this is a load-time-adjacent-but-not-load-time
+ * failure (exit `5`, from `src/internal/errors.ts`'s own table: "a stateful
+ * precondition this operation depends on could not be satisfied"), not a
+ * signal that nothing happened.
+ */
+export class RecordRestoreError extends HookassertError {
+  /** Stable discriminator, unchanged across non-breaking releases. */
+  readonly code = "ERR_RECORD_RESTORE" as const;
+
+  /** Record restore failures always exit 5 (load error). */
+  readonly exitCode = 5;
+
+  /** Absolute path of the session file `record --stop` looked for or read. */
+  readonly sessionFile: string;
+
+  /**
+   * @param sessionFile - Absolute path of the session file involved.
+   * @param reason - What about the restore could not be satisfied: no active
+   * session, or a byte-level mismatch against the stored pre-image.
+   */
+  constructor(sessionFile: string, reason: string) {
+    super(
+      `record --stop could not restore settings cleanly (session file ${sessionFile}): ${reason}`,
+    );
+    this.name = "RecordRestoreError";
+    this.sessionFile = sessionFile;
+  }
+}
