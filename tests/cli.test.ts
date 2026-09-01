@@ -739,6 +739,25 @@ describe("runCli record", () => {
     expect(Object.keys(parsed.hooks).sort()).toEqual(["PreToolUse", "Stop"]);
   });
 
+  it("dedupes a repeated event in --events instead of inserting two matcher groups", async () => {
+    const cwd = makeProjectDir();
+    const result = await runCli(
+      ["record", "--events", "PreToolUse,PreToolUse"],
+      "hookassert",
+      explainDeps({ cwd }),
+    );
+
+    expect(result.exitCode).toBe(0);
+    const settingsText = readFileSync(
+      path.join(cwd, ".claude", "settings.local.json"),
+      "utf8",
+    );
+    const parsed = JSON.parse(settingsText) as {
+      hooks: { PreToolUse: unknown[] };
+    };
+    expect(parsed.hooks.PreToolUse).toHaveLength(1);
+  });
+
   it("exits 4 with ERR_USAGE for an unrecognized event in --events", async () => {
     const cwd = makeProjectDir();
     const result = await runCli(
@@ -776,6 +795,22 @@ describe("runCli record", () => {
     expect(result.stderr).toContain("ERR_USAGE");
   });
 
+  it("bakes HOOKASSERT_CLAUDE_VERSION into the capture script when --claude-version is absent", async () => {
+    const cwd = makeProjectDir();
+    const result = await runCli(
+      ["record"],
+      "hookassert",
+      explainDeps({ cwd, env: { HOOKASSERT_CLAUDE_VERSION: "2.1.300" } }),
+    );
+
+    expect(result.exitCode).toBe(0);
+    const scriptText = readFileSync(
+      path.join(cwd, ".hookassert", "capture-hook.cjs"),
+      "utf8",
+    );
+    expect(scriptText).toContain('BAKED_CLAUDE_VERSION = "2.1.300"');
+  });
+
   it("record then record --stop performs exactly zero spawns and restores the file (zero diff)", async () => {
     const cwd = makeProjectDir();
     const spawner = new CountingSpawner();
@@ -803,7 +838,7 @@ describe("runCli record", () => {
     expect(spawner.calls).toHaveLength(0);
   });
 
-  it("record --stop with no active session exits 5 with ERR_RECORD_RESTORE", async () => {
+  it("record --stop with no active session exits 5 with ERR_RECORD_NO_SESSION", async () => {
     const cwd = makeProjectDir();
     const result = await runCli(
       ["record", "--stop"],
@@ -812,7 +847,7 @@ describe("runCli record", () => {
     );
 
     expect(result.exitCode).toBe(5);
-    expect(result.stderr).toContain("ERR_RECORD_RESTORE");
+    expect(result.stderr).toContain("ERR_RECORD_NO_SESSION");
   });
 
   it("exits 4 with ERR_USAGE when --stop is combined with another option", async () => {

@@ -15,7 +15,12 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { RecordRestoreError } from "../src/internal/errors.js";
+import {
+  RecordNoSessionError,
+  RecordRestoreError,
+  SettingsParseError,
+  UsageError,
+} from "../src/internal/errors.js";
 import {
   hooksForEvent,
   loadSourceHooks,
@@ -29,6 +34,7 @@ import { buildCaptureScript } from "../src/internal/record/capture.js";
 import {
   defaultCaptureDir,
   hookassertDir,
+  isRecordSessionActive,
   lastRecordedClaudeVersionPath,
   readLastRecordedClaudeVersion,
   sessionFilePath,
@@ -91,8 +97,12 @@ function matcherForEvent(event: string): string | undefined {
   return spec?.matcherTargets.kind === "none" ? undefined : "*";
 }
 
+/** The `CapturePlan.file` used by every hand-built plan in this file's `insertCaptureHook` tests. */
+const SETTINGS_FILE = "/abs/.claude/settings.local.json";
+
 describe("insertCaptureHook", () => {
   const plan: CapturePlan = {
+    file: SETTINGS_FILE,
     command: "/abs/.hookassert/capture-hook.cjs",
     entries: [{ event: "PreToolUse", matcher: "*" }],
   };
@@ -118,6 +128,7 @@ describe("insertCaptureHook", () => {
 
   it("appends a matcher group without a matcher key when the event takes none", () => {
     const stopPlan: CapturePlan = {
+      file: SETTINGS_FILE,
       command: plan.command,
       entries: [{ event: "Stop", matcher: undefined }],
     };
@@ -126,20 +137,45 @@ describe("insertCaptureHook", () => {
     expect(result.text).not.toContain('"matcher"');
   });
 
-  it("declares the capture command under the requested event", () => {
+  it("single-quotes the command so a project path with a space survives /bin/sh -c", () => {
     const result = insertCaptureHook(EXISTING_SETTINGS_TEXT, plan);
     const parsed = JSON.parse(result.text) as {
       hooks: { PreToolUse: { matcher?: string; hooks: { command: string }[] }[] };
     };
     expect(parsed.hooks.PreToolUse).toContainEqual({
       matcher: "*",
-      hooks: [{ command: plan.command }],
+      hooks: [{ command: `'${plan.command}'` }],
     });
   });
+
+  it.each([
+    ["a syntax error", "{"],
+    ['"hooks" as an array instead of an object', '{"hooks": []}'],
+    ['"hooks" as null instead of an object', '{"hooks": null}'],
+    [
+      '"hooks.PreToolUse" as an object instead of an array',
+      '{"hooks": {"PreToolUse": {}}}',
+    ],
+  ])(
+    "throws SettingsParseError (ERR_SETTINGS_PARSE) rather than crashing for %s",
+    (_label, malformedText) => {
+      let caught: unknown;
+      try {
+        insertCaptureHook(malformedText, plan);
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).toBeInstanceOf(SettingsParseError);
+      expect((caught as SettingsParseError).code).toBe("ERR_SETTINGS_PARSE");
+      expect((caught as SettingsParseError).file).toBe(SETTINGS_FILE);
+    },
+  );
 });
 
 describe("insertCaptureHook + removeCaptureHook round trip", () => {
   const plan: CapturePlan = {
+    file: SETTINGS_FILE,
     command: "/abs/.hookassert/capture-hook.cjs",
     entries: [
       { event: "PreToolUse", matcher: "*" },
@@ -198,10 +234,8 @@ describe("insertCaptureHook + removeCaptureHook round trip", () => {
     );
   });
 
-  it("insertCaptureHook tolerates text with no parseable root", () => {
-    const result = insertCaptureHook("", plan);
-    const parsed = JSON.parse(result.text) as { hooks: { PreToolUse: unknown[] } };
-    expect(parsed.hooks.PreToolUse).toHaveLength(1);
+  it("insertCaptureHook rejects an empty settings text as a syntax error rather than guessing", () => {
+    expect(() => insertCaptureHook("", plan)).toThrow(SettingsParseError);
   });
 
   it("removeCaptureHook leaves an event alone when its whole array was deleted by hand", () => {
@@ -233,7 +267,7 @@ describe("insertCaptureHook + removeCaptureHook round trip", () => {
       hooks: { PreToolUse: { matcher?: string; hooks: { command: string }[] }[] };
     };
     const ourGroup = parsed.hooks.PreToolUse.find((group) =>
-      group.hooks.some((h) => h.command === plan.command),
+      group.hooks.some((h) => h.command.includes(plan.command)),
     );
     if (ourGroup === undefined) {
       throw new Error("expected to find our own capture-hook group");
@@ -504,8 +538,8 @@ describe("startRecordSession / stopRecordSession", () => {
     const parsed: unknown = JSON.parse(settingsText);
     expect(parsed).toMatchObject({
       hooks: {
-        PreToolUse: [{ matcher: "*", hooks: [{ command: info.captureScript }] }],
-        Stop: [{ hooks: [{ command: info.captureScript }] }],
+        PreToolUse: [{ matcher: "*", hooks: [{ command: `'${info.captureScript}'` }] }],
+        Stop: [{ hooks: [{ command: `'${info.captureScript}'` }] }],
       },
     });
   });
@@ -549,7 +583,108 @@ describe("startRecordSession / stopRecordSession", () => {
     expect(existsSync(sessionFilePath(cwd))).toBe(false);
   });
 
-  it("record --stop with no active session throws ERR_RECORD_RESTORE (exit 5)", () => {
+  it.each([
+    [
+      "an inline single-line hook group",
+      '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"command":"./guard.sh"}]}]}}\n',
+    ],
+    [
+      "tab indentation",
+      '{\n\t"permissions": {\n\t\t"allow": [\n\t\t\t"Bash(echo:*)"\n\t\t]\n\t}\n}\n',
+    ],
+    ["compact JSON", '{"permissions":{"allow":["Bash(echo:*)"]}}'],
+    ["a bare object with just a newline inside it", "{\n}\n"],
+  ])(
+    "insert then stop restores byte-identical text even for %s, a non-canonical format " +
+      "jsonc-parser's own insert reformats",
+    (_label, original) => {
+      const cwd = project();
+      mkdirSync(path.join(cwd, ".claude"), { recursive: true });
+      const settingsFile = path.join(cwd, ".claude", "settings.local.json");
+      writeFileSync(settingsFile, original, "utf8");
+
+      startRecordSession({
+        cwd,
+        events: ["PreToolUse"],
+        matcherForEvent,
+        captureDir: undefined,
+        claudeVersionFlag: undefined,
+      });
+
+      // Something changed the file while recording, proving the capture hook
+      // really was inserted, before it gets removed again below.
+      expect(readFileSync(settingsFile, "utf8")).not.toBe(original);
+
+      const result = stopRecordSession(cwd);
+      expect(result.settingsFile).toBe(settingsFile);
+      expect(readFileSync(settingsFile, "utf8")).toBe(original);
+      expect(existsSync(sessionFilePath(cwd))).toBe(false);
+    },
+  );
+
+  it("single-quotes the capture command so a project path with a space round-trips through record --stop", () => {
+    const parent = makeTempDir("hookassert-record-space-");
+    const cwd = path.join(parent, "My Project");
+    mkdirSync(cwd, { recursive: true });
+    expect(cwd).toContain(" ");
+
+    const info = startRecordSession({
+      cwd,
+      events: ["PreToolUse"],
+      matcherForEvent,
+      captureDir: undefined,
+      claudeVersionFlag: undefined,
+    });
+
+    const settingsText = readFileSync(info.settingsFile, "utf8");
+    const parsed = JSON.parse(settingsText) as {
+      hooks: { PreToolUse: { hooks: { command: string }[] }[] };
+    };
+    const command = parsed.hooks.PreToolUse[0]?.hooks[0]?.command;
+    // Single-quoted, so /bin/sh -c sees it as one word rather than
+    // word-splitting on the space in the project path.
+    expect(command).toBe(`'${info.captureScript}'`);
+
+    const result = stopRecordSession(cwd);
+    expect(result.settingsFile).toBe(info.settingsFile);
+    expect(existsSync(sessionFilePath(cwd))).toBe(false);
+  });
+
+  it("record --stop still restores cleanly when a hand edit only touched the capture hook's own matcher group", () => {
+    const cwd = project();
+    mkdirSync(path.join(cwd, ".claude"), { recursive: true });
+    const settingsFile = path.join(cwd, ".claude", "settings.local.json");
+    writeFileSync(settingsFile, EXISTING_SETTINGS_TEXT, "utf8");
+
+    startRecordSession({
+      cwd,
+      events: ["PreToolUse"],
+      matcherForEvent,
+      captureDir: undefined,
+      claudeVersionFlag: undefined,
+    });
+
+    const postImageText = readFileSync(settingsFile, "utf8");
+    // Edit only the matcher inside the capture hook's own inserted group
+    // while recording is active: `removeCaptureHook` searches each group by
+    // its "command", not its matcher, and still deletes the whole group
+    // wholesale once a single-hook group's command matches. So this diverges
+    // from what `record` itself wrote (the fast, byte-verbatim restore path
+    // cannot be taken) yet still nets out to the exact pre-image once that
+    // group is stripped back out — the fallback inverse-edit path's own
+    // success case, not a divergence to report.
+    expect(postImageText).toContain('"matcher": "*"');
+    const handEdited = postImageText.replace('"matcher": "*"', '"matcher": "Edit"');
+    expect(handEdited).not.toBe(postImageText);
+    writeFileSync(settingsFile, handEdited, "utf8");
+
+    const result = stopRecordSession(cwd);
+    expect(result.settingsFile).toBe(settingsFile);
+    expect(readFileSync(settingsFile, "utf8")).toBe(EXISTING_SETTINGS_TEXT);
+    expect(existsSync(sessionFilePath(cwd))).toBe(false);
+  });
+
+  it("record --stop with no active session throws ERR_RECORD_NO_SESSION (exit 5)", () => {
     const cwd = project();
 
     let caught: unknown;
@@ -559,9 +694,9 @@ describe("startRecordSession / stopRecordSession", () => {
       caught = error;
     }
 
-    expect(caught).toBeInstanceOf(RecordRestoreError);
-    expect((caught as RecordRestoreError).code).toBe("ERR_RECORD_RESTORE");
-    expect((caught as RecordRestoreError).exitCode).toBe(5);
+    expect(caught).toBeInstanceOf(RecordNoSessionError);
+    expect((caught as RecordNoSessionError).code).toBe("ERR_RECORD_NO_SESSION");
+    expect((caught as RecordNoSessionError).exitCode).toBe(5);
   });
 
   it("record --stop throws ERR_RECORD_RESTORE when the session file is not valid JSON", () => {
@@ -688,20 +823,75 @@ describe("startRecordSession / stopRecordSession", () => {
       claudeVersionFlag: undefined,
     });
 
-    expect(() =>
+    // The settings file already declares the capture-hook command from the
+    // first start, so a second start (even below src/cli.ts's own
+    // isRecordSessionActive guard) must refuse rather than insert a
+    // duplicate matcher group next to the first one's still-active leftovers.
+    let caught: unknown;
+    try {
       startRecordSession({
         cwd,
         events: ["PreToolUse"],
         matcherForEvent,
         captureDir: undefined,
         claudeVersionFlag: undefined,
-      }),
-    ).not.toThrow();
-    // startRecordSession itself has no active-session guard (that lives in
-    // src/cli.ts's runRecordStart, ahead of calling it) — this asserts the
-    // session file left behind after a second start is still the second
-    // one's own bookkeeping, i.e. nothing crashed or silently merged state.
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(UsageError);
+    expect((caught as UsageError).code).toBe("ERR_USAGE");
+    // The first session's own bookkeeping is untouched by the refused retry.
     expect(existsSync(sessionFilePath(cwd))).toBe(true);
+  });
+
+  it("refuses to start when the settings file already declares the capture-hook command but no session file exists", () => {
+    // Simulates a previous `record` run that failed between writing the
+    // settings file and finalizing its own session bookkeeping: an orphaned
+    // capture hook with nothing tracking it.
+    const cwd = project();
+    const started = startRecordSession({
+      cwd,
+      events: ["PreToolUse"],
+      matcherForEvent,
+      captureDir: undefined,
+      claudeVersionFlag: undefined,
+    });
+    rmSync(sessionFilePath(cwd));
+    expect(isRecordSessionActive(cwd)).toBe(false);
+
+    let caught: unknown;
+    try {
+      startRecordSession({
+        cwd,
+        events: ["PreToolUse"],
+        matcherForEvent,
+        captureDir: undefined,
+        claudeVersionFlag: undefined,
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(UsageError);
+    expect((caught as UsageError).code).toBe("ERR_USAGE");
+    expect((caught as UsageError).message).toContain(started.captureScript);
+  });
+
+  it("leaves no temporary session file behind after a successful start", () => {
+    const cwd = project();
+    startRecordSession({
+      cwd,
+      events: ["PreToolUse"],
+      matcherForEvent,
+      captureDir: undefined,
+      claudeVersionFlag: undefined,
+    });
+
+    const sessionFileBasename = path.basename(sessionFilePath(cwd));
+    const leftovers = readdirSync(hookassertDir(cwd)).filter((name) =>
+      name.startsWith(`${sessionFileBasename}.tmp-`),
+    );
+    expect(leftovers).toEqual([]);
   });
 });
 

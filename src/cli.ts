@@ -51,6 +51,7 @@ import {
 } from "./internal/matcher/index.js";
 import {
   buildReportHeader,
+  formatClaudeVersion,
   isReportFormat,
   renderGithub,
   renderInFormat,
@@ -584,26 +585,27 @@ const RECORD_OPTIONS = {
  * `record` (without `--stop`): insert the capture hook for every requested
  * event, and report where.
  *
- * @throws {UsageError} `--claude-version` was not a valid `major.minor.patch`
- * string, `--events` named an unrecognized event, or a session is already
- * active.
- * (Also propagates every load-time error `loadSpecFile` can throw.)
+ * @remarks
+ * The version baked into the generated capture script is resolved through
+ * {@link resolveVersionContext} — the same `--claude-version` beats
+ * {@link CLAUDE_VERSION_ENV_VAR} precedence `explain`/`lint` use — so
+ * `HOOKASSERT_CLAUDE_VERSION` set in the environment is honored here too,
+ * not just an explicit flag.
+ *
+ * @throws {UsageError} `--claude-version` (or {@link CLAUDE_VERSION_ENV_VAR})
+ * was not a valid `major.minor.patch` string, `--events` named an
+ * unrecognized event, or a session is already active.
+ * (Also propagates every load-time error `loadSpecFile` can throw, and every
+ * error `startRecordSession` can throw.)
  */
 function runRecordStart(
   parsed: ReturnType<typeof parseArgsForRecord>,
   deps: CliDeps,
 ): CliResult {
-  const claudeVersionFlag = parsed.values["claude-version"];
-  if (claudeVersionFlag !== undefined) {
-    try {
-      parseClaudeVersion(claudeVersionFlag);
-    } catch {
-      throw new UsageError(
-        `--claude-version: "${claudeVersionFlag}" is not a valid major.minor.patch ` +
-          "Claude Code version.",
-      );
-    }
-  }
+  const versionContext = resolveVersionContext(
+    parsed.values["claude-version"],
+    deps.env,
+  );
 
   if (isRecordSessionActive(deps.cwd)) {
     throw new UsageError(
@@ -619,10 +621,16 @@ function runRecordStart(
   if (eventsFlag === undefined) {
     events = Object.keys(spec.events).filter(isEventName);
   } else {
-    const requested = eventsFlag
-      .split(",")
-      .map((name) => name.trim())
-      .filter((name) => name.length > 0);
+    // Deduped: `--events PreToolUse,PreToolUse` must insert exactly one
+    // matcher group per event, not one per (possibly repeated) mention.
+    const requested = [
+      ...new Set(
+        eventsFlag
+          .split(",")
+          .map((name) => name.trim())
+          .filter((name) => name.length > 0),
+      ),
+    ];
     if (requested.length === 0) {
       throw new UsageError("--events must name at least one event.");
     }
@@ -643,7 +651,8 @@ function runRecordStart(
     matcherForEvent: (event) =>
       spec.events[event]?.matcherTargets.kind === "none" ? undefined : "*",
     captureDir: parsed.values["capture-dir"],
-    claudeVersionFlag,
+    claudeVersionFlag:
+      versionContext.kind === "known" ? formatClaudeVersion(versionContext) : undefined,
   });
 
   const stdout =

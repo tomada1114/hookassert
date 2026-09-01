@@ -26,10 +26,13 @@ import {
   findNodeAtLocation,
   modify,
   parseTree,
+  printParseErrorCode,
   type ModificationOptions,
   type Node,
+  type ParseError,
 } from "jsonc-parser";
 
+import { SettingsParseError } from "../errors.js";
 import type { EventName } from "../../types.js";
 
 /** One event `record` inserts a capture-hook matcher group for. */
@@ -54,6 +57,16 @@ export interface CaptureHookEntry {
 
 /** What `insertCaptureHook` inserts, and for which events. */
 export interface CapturePlan {
+  /**
+   * Absolute path of the settings file `text` was read from.
+   *
+   * @remarks
+   * `insertCaptureHook` itself never reads or writes this path — `text` is
+   * still the only input it edits — this is here purely so a thrown
+   * {@link SettingsParseError} names the real file instead of nothing at all.
+   */
+  readonly file: string;
+
   /** Absolute path of the capture-hook script every inserted entry declares as its `command`. */
   readonly command: string;
 
@@ -112,11 +125,36 @@ const PLAIN_MODIFY: ModificationOptions = {
   formattingOptions: FORMATTING_OPTIONS,
 };
 
+/**
+ * Single-quote `command` the way a POSIX shell expects, escaping any
+ * embedded single quote.
+ *
+ * @remarks
+ * Claude Code runs a no-args hook `command` through `/bin/sh -c`, so an
+ * absolute path containing a space (`/Users/alice/My Project/…`) would
+ * otherwise word-split into several arguments and silently never run as
+ * intended. Quoting here — the only place the command string is built — is
+ * what `isOurCommand` below un-does to keep recognizing the hook it wrote.
+ */
+function shellQuoteCommand(command: string): string {
+  return `'${command.replaceAll("'", "'\\''")}'`;
+}
+
 /** One matcher-group object, exactly as Claude Code's own settings schema shapes `hooks.<event>[]`'s entries. */
 function groupValue(command: string, matcher: string | undefined): unknown {
+  const quotedCommand = shellQuoteCommand(command);
   return matcher === undefined
-    ? { hooks: [{ command }] }
-    : { matcher, hooks: [{ command }] };
+    ? { hooks: [{ command: quotedCommand }] }
+    : { matcher, hooks: [{ command: quotedCommand }] };
+}
+
+function describeParseErrors(errors: readonly ParseError[]): string {
+  return errors
+    .map(
+      (error) =>
+        `${printParseErrorCode(error.error)} at offset ${String(error.offset)}`,
+    )
+    .join(", ");
 }
 
 /**
@@ -128,13 +166,34 @@ function groupValue(command: string, matcher: string | undefined): unknown {
  * insertion appends (`jsonc-parser`'s `-1` array index) rather than
  * replacing, so an existing matcher group for the same event is untouched —
  * order, formatting, and comments included.
+ *
+ * Parses `text` the same way `settings/load.ts` does — collecting errors
+ * rather than letting `jsonc-parser` guess through them — and validates the
+ * shape of any `"hooks"` or `"hooks.<event>"` node that already exists,
+ * before `modify`/`applyEdits` ever runs against it: those functions throw a
+ * raw, undocumented `Error` for a parent of the wrong type (for example
+ * `"hooks": []` or `"hooks": {"PreToolUse": {}}`), which would otherwise
+ * surface as an uncaught crash in `record/session.ts` after other state (the
+ * capture script) has already been written.
+ *
+ * @throws {SettingsParseError} `text` has a JSONC syntax error, or an
+ * existing `"hooks"` value is not an object, or an existing
+ * `"hooks.<event>"` value for one of `plan.entries` is not an array.
  */
 export function insertCaptureHook(text: string, plan: CapturePlan): CaptureEdit {
-  const originalRoot = parseTree(text);
+  const parseErrors: ParseError[] = [];
+  const originalRoot = parseTree(text, parseErrors, { allowTrailingComma: true });
+  if (parseErrors.length > 0) {
+    throw new SettingsParseError(plan.file, "local", describeParseErrors(parseErrors));
+  }
+
   const originalHooksNode =
     originalRoot === undefined
       ? undefined
       : findNodeAtLocation(originalRoot, ["hooks"]);
+  if (originalHooksNode !== undefined && originalHooksNode.type !== "object") {
+    throw new SettingsParseError(plan.file, "local", '"hooks" must be an object');
+  }
   const preexistingHooksObject = originalHooksNode?.type === "object";
 
   const preexistingEventArray: Record<string, boolean> = {};
@@ -143,6 +202,13 @@ export function insertCaptureHook(text: string, plan: CapturePlan): CaptureEdit 
       originalHooksNode === undefined
         ? undefined
         : findNodeAtLocation(originalHooksNode, [entry.event]);
+    if (eventNode !== undefined && eventNode.type !== "array") {
+      throw new SettingsParseError(
+        plan.file,
+        "local",
+        `"hooks.${entry.event}" must be an array`,
+      );
+    }
     preexistingEventArray[entry.event] = eventNode?.type === "array";
   }
 
@@ -167,7 +233,9 @@ export function insertCaptureHook(text: string, plan: CapturePlan): CaptureEdit 
 /** Whether `hookNode` (a `hooks.<event>[].hooks[]` entry) declares `command`. */
 function isOurCommand(hookNode: Node, command: string): boolean {
   const commandNode = findNodeAtLocation(hookNode, ["command"]);
-  return commandNode?.type === "string" && commandNode.value === command;
+  return (
+    commandNode?.type === "string" && commandNode.value === shellQuoteCommand(command)
+  );
 }
 
 /**

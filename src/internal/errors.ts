@@ -343,19 +343,56 @@ export class FixtureUnblockableDecisionError extends HookassertError {
 }
 
 /**
- * Thrown when `record --stop` cannot restore the settings file it edited with
- * the "zero diff" guarantee the design promises.
+ * Thrown when `record --stop` finds no active session to restore.
  *
  * @remarks
- * Covers both ways that guarantee can fail: `--stop` given with no active
- * session to restore (no session file, or one naming a settings file that no
- * longer matches), and a session whose settings file was edited by hand while
- * recording was active. In the second case the inverse edit (removing the
- * capture hook) is still applied before this is thrown — see `record/session.ts`'s
- * `stopRecordSession` — so this is a load-time-adjacent-but-not-load-time
- * failure (exit `5`, from `src/internal/errors.ts`'s own table: "a stateful
- * precondition this operation depends on could not be satisfied"), not a
- * signal that nothing happened.
+ * Structurally distinct from {@link RecordRestoreError}: nothing was found to
+ * act on at all — no session file exists at
+ * {@link RecordNoSessionError.sessionFile} — so there is no settings file
+ * that could have been touched, and no divergence to report. Kept as its own
+ * `code` (per `designing-errors`' rule for structurally different failure
+ * reasons) so a caller can tell "nothing to stop" apart from "found a session
+ * but could not restore it cleanly" without parsing `message`.
+ */
+export class RecordNoSessionError extends HookassertError {
+  /** Stable discriminator, unchanged across non-breaking releases. */
+  readonly code = "ERR_RECORD_NO_SESSION" as const;
+
+  /** No-active-session failures always exit 5 (load error). */
+  readonly exitCode = 5;
+
+  /** Absolute path of the session file `record --stop` looked for and did not find. */
+  readonly sessionFile: string;
+
+  /**
+   * @param sessionFile - Absolute path of the session file that was expected but not found.
+   */
+  constructor(sessionFile: string) {
+    super(
+      `record --stop found no active recording session (expected ${sessionFile}). ` +
+        "Run `record` (without --stop) first.",
+    );
+    this.name = "RecordNoSessionError";
+    this.sessionFile = sessionFile;
+  }
+}
+
+/**
+ * Thrown when `record --stop` finds an active session but cannot restore the
+ * settings file it edited with the "zero diff" guarantee the design promises.
+ *
+ * @remarks
+ * Covers every way that can fail once a session file was found at all: it
+ * could not be parsed as JSON, its shape is missing required fields, or it
+ * parses and validates but the settings file it names diverged from the
+ * stored pre-image while recording was active. In the last case the inverse
+ * edit (removing the capture hook) is still applied before this is thrown —
+ * see `record/session.ts`'s `stopRecordSession` — so this is a
+ * load-time-adjacent-but-not-load-time failure (exit `5`, from
+ * `src/internal/errors.ts`'s own table: "a stateful precondition this
+ * operation depends on could not be satisfied"), not a signal that nothing
+ * happened. {@link RecordNoSessionError} is the separate `code` for "there
+ * was no session file to even try."
  */
 export class RecordRestoreError extends HookassertError {
   /** Stable discriminator, unchanged across non-breaking releases. */
@@ -364,13 +401,14 @@ export class RecordRestoreError extends HookassertError {
   /** Record restore failures always exit 5 (load error). */
   readonly exitCode = 5;
 
-  /** Absolute path of the session file `record --stop` looked for or read. */
+  /** Absolute path of the session file `record --stop` read. */
   readonly sessionFile: string;
 
   /**
    * @param sessionFile - Absolute path of the session file involved.
-   * @param reason - What about the restore could not be satisfied: no active
-   * session, or a byte-level mismatch against the stored pre-image.
+   * @param reason - What about the restore could not be satisfied: the
+   * session file was unusable, or a byte-level mismatch against the stored
+   * pre-image.
    */
   constructor(sessionFile: string, reason: string) {
     super(

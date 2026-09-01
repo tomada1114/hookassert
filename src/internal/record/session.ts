@@ -21,18 +21,20 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
+import process from "node:process";
 
-import { RecordRestoreError } from "../errors.js";
+import { RecordNoSessionError, RecordRestoreError, UsageError } from "../errors.js";
 import {
   insertCaptureHook,
   removeCaptureHook,
   type CaptureAnchors,
   type CaptureHookEntry,
-} from "../settings/edit.js";
+} from "../settings/index.js";
 import type { EventName } from "../../types.js";
 import { buildCaptureScript, CAPTURE_SCRIPT_FILENAME } from "./capture.js";
 
@@ -162,6 +164,24 @@ interface RecordSessionFile {
   readonly settingsFile: string;
   readonly preImageText: string;
   readonly preImageSha256: string;
+
+  /**
+   * SHA-256 of the settings text `startRecordSession` itself wrote —
+   * `insertCaptureHook`'s own output — before anything else could have
+   * touched it.
+   *
+   * @remarks
+   * `stopRecordSession` compares the settings file's current text against
+   * this first: a match means nothing has touched the file since `record`
+   * itself wrote it, so writing {@link preImageText} back verbatim is a
+   * guaranteed byte-for-byte restore. Re-deriving the pre-image by inverting
+   * the insert through `removeCaptureHook` instead cannot make that promise —
+   * `jsonc-parser`'s `modify` reformats neighbouring nodes on insert, so
+   * inverting it does not reliably reproduce text that was never in
+   * `insertCaptureHook`'s own canonical two-space style to begin with.
+   */
+  readonly postImageSha256: string;
+
   readonly anchors: CaptureAnchors;
   readonly createdFresh: boolean;
 }
@@ -175,6 +195,7 @@ function isRecordSessionFile(value: unknown): value is RecordSessionFile {
     typeof v.settingsFile === "string" &&
     typeof v.preImageText === "string" &&
     typeof v.preImageSha256 === "string" &&
+    typeof v.postImageSha256 === "string" &&
     typeof v.createdFresh === "boolean" &&
     typeof v.anchors === "object" &&
     v.anchors !== null
@@ -218,6 +239,24 @@ export interface RecordSessionInfo {
  * `preImageText` before any write happens — including before the capture
  * script itself is written — so it can never reflect anything other than the
  * exact text `insertCaptureHook` was given.
+ *
+ * `insertCaptureHook` (which validates and edits `preImageText`) is called
+ * before anything is written to disk at all, including the capture script
+ * itself: a malformed settings file must fail cleanly rather than leaving a
+ * half-started session behind. The session file is then written to a
+ * temporary name and renamed into place only after the settings file write
+ * has succeeded, so a failure between the two writes cannot leave an
+ * orphaned capture hook that `stopRecordSession` has no session file to find.
+ * The `preImageText.includes(captureScript)` check below is the other half
+ * of that guarantee: it catches the orphan itself, on a later `start`, even
+ * if a failure ever does slip through.
+ *
+ * @throws {UsageError} `preImageText` already declares the capture-hook
+ * command with no active session bookkeeping to match it — the settings file
+ * side of a previous `record` run that failed before its session file was
+ * finalized.
+ * (Also propagates `SettingsParseError` from `insertCaptureHook` when
+ * `preImageText` cannot be parsed or edited.)
  */
 export function startRecordSession(options: StartRecordOptions): RecordSessionInfo {
   const settingsFile = targetSettingsFile(options.cwd);
@@ -226,15 +265,36 @@ export function startRecordSession(options: StartRecordOptions): RecordSessionIn
   const preImageText = existingText ?? FRESH_SETTINGS_TEMPLATE;
   const preImageSha256 = sha256(preImageText);
 
+  const stateDir = hookassertDir(options.cwd);
+  const captureScript = path.join(stateDir, CAPTURE_SCRIPT_FILENAME);
+
+  if (preImageText.includes(captureScript)) {
+    throw new UsageError(
+      `${settingsFile} already declares the capture-hook command (${captureScript}), but no ` +
+        `recording session is active for ${options.cwd}. A previous \`record\` run likely ` +
+        `failed partway through. Remove that hook entry from ${settingsFile} by hand, then ` +
+        "run `record` again.",
+    );
+  }
+
+  const entries: CaptureHookEntry[] = options.events.map((event) => ({
+    event,
+    matcher: options.matcherForEvent(event),
+  }));
+  const { text: newSettingsText, anchors } = insertCaptureHook(preImageText, {
+    file: settingsFile,
+    command: captureScript,
+    entries,
+  });
+  const postImageSha256 = sha256(newSettingsText);
+
   const captureDir =
     options.captureDir === undefined
       ? defaultCaptureDir(options.cwd)
       : path.resolve(options.cwd, options.captureDir);
-  const stateDir = hookassertDir(options.cwd);
   mkdirSync(stateDir, { recursive: true });
   mkdirSync(captureDir, { recursive: true });
 
-  const captureScript = path.join(stateDir, CAPTURE_SCRIPT_FILENAME);
   const scriptText = buildCaptureScript({
     captureDir,
     claudeVersionFlag: options.claudeVersionFlag,
@@ -243,30 +303,22 @@ export function startRecordSession(options: StartRecordOptions): RecordSessionIn
   writeFileSync(captureScript, scriptText, "utf8");
   chmodSync(captureScript, 0o755);
 
-  const entries: CaptureHookEntry[] = options.events.map((event) => ({
-    event,
-    matcher: options.matcherForEvent(event),
-  }));
-  const { text: newSettingsText, anchors } = insertCaptureHook(preImageText, {
-    command: captureScript,
-    entries,
-  });
-
-  mkdirSync(path.dirname(settingsFile), { recursive: true });
-  writeFileSync(settingsFile, newSettingsText, "utf8");
-
   const sessionFile: RecordSessionFile = {
     settingsFile,
     preImageText,
     preImageSha256,
+    postImageSha256,
     anchors,
     createdFresh,
   };
-  writeFileSync(
-    sessionFilePath(options.cwd),
-    JSON.stringify(sessionFile, null, 2),
-    "utf8",
-  );
+  const finalSessionPath = sessionFilePath(options.cwd);
+  const tempSessionPath = `${finalSessionPath}.tmp-${String(process.pid)}-${String(Date.now())}`;
+  writeFileSync(tempSessionPath, JSON.stringify(sessionFile, null, 2), "utf8");
+
+  mkdirSync(path.dirname(settingsFile), { recursive: true });
+  writeFileSync(settingsFile, newSettingsText, "utf8");
+
+  renameSync(tempSessionPath, finalSessionPath);
 
   return {
     settingsFile,
@@ -283,31 +335,45 @@ export interface StopRecordResult {
 }
 
 /**
- * Stop the active capture session: apply the inverse edit, and verify the
+ * Stop the active capture session: restore the settings file, and verify the
  * result is byte-for-byte identical to the stored pre-image.
  *
  * @remarks
- * The inverse edit is written back to `settingsFile` unconditionally, before
- * the byte-for-byte check is even made — so a caller who only reads the
- * thrown error's message still finds the capture hook already removed. The
- * session file itself is always removed too, whether the check passed or
- * not: a stopped session is over either way, and a second `--stop` must find
- * nothing active to restore.
+ * The common case is a guaranteed byte-for-byte restore: when the settings
+ * file's current text still matches {@link RecordSessionFile.postImageSha256}
+ * (nothing touched it since `startRecordSession` itself wrote it), the stored
+ * {@link RecordSessionFile.preImageText} is written back verbatim, rather
+ * than re-derived by inverting the insert through `removeCaptureHook`. That
+ * inversion goes through `jsonc-parser`'s `modify`, which reformats
+ * neighbouring nodes on insert — an inline single-line hook group, tab
+ * indentation, or compact JSON in the original file would otherwise never
+ * round-trip byte-identical, even with no user edit at all.
  *
- * @throws {RecordRestoreError} no active session was found at
- * {@link sessionFilePath}, or the restored text does not match the stored
- * pre-image byte-for-byte (the settings file was edited by hand while
- * recording was active) — in the second case, the mismatch is reported only
- * after the capture hook has already been removed from the file on disk.
+ * Only when the settings file has diverged from what `record` itself wrote —
+ * a real hand edit while recording was active — does this fall back to
+ * `removeCaptureHook`'s best-effort inverse edit, written back unconditionally
+ * before the byte-for-byte check against the pre-image is even made, so a
+ * caller who only reads the thrown error's message still finds the capture
+ * hook already removed.
+ *
+ * The session file itself is always removed once a session was found, in
+ * either branch: a stopped session is over either way, and a second `--stop`
+ * must find nothing active to restore.
+ *
+ * @throws {RecordNoSessionError} no session file was found at
+ * {@link sessionFilePath}.
+ * @throws {RecordRestoreError} a session file was found but could not be
+ * used (unparseable JSON, or missing required fields), or the fallback
+ * inverse edit's result does not match the stored pre-image byte-for-byte
+ * (the settings file was edited by hand while recording was active) — in
+ * the last case, the mismatch is reported only after the capture hook has
+ * already been removed from the file on disk.
  */
 export function stopRecordSession(cwd: string): StopRecordResult {
   const sessionPath = sessionFilePath(cwd);
   const sessionText = readTextOrUndefined(sessionPath);
   if (sessionText === undefined) {
-    throw new RecordRestoreError(
-      sessionPath,
-      "no active recording session was found. Run `record` (without --stop) first.",
-    );
+    throw new RecordNoSessionError(sessionPath);
   }
 
   let parsed: unknown;
@@ -329,6 +395,15 @@ export function stopRecordSession(cwd: string): StopRecordResult {
   }
 
   const currentText = readTextOrUndefined(parsed.settingsFile) ?? "";
+
+  if (sha256(currentText) === parsed.postImageSha256) {
+    writeFileSync(parsed.settingsFile, parsed.preImageText, "utf8");
+    if (existsSync(sessionPath)) {
+      rmSync(sessionPath);
+    }
+    return { settingsFile: parsed.settingsFile };
+  }
+
   const restoredText = removeCaptureHook(currentText, parsed.anchors);
   writeFileSync(parsed.settingsFile, restoredText, "utf8");
 
