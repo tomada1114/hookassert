@@ -22,10 +22,10 @@ recording what disagreed, the proposed diff the script printed, and how it was r
   **never writes to `spec/claude-code-<range>.json` itself.** The spec change and the
   mismatch's history go through an ordinary pull request, reviewed by a human, same as
   any other code change.
-- The same rule governs `payloadShape.verified` (`#3`): when a captured payload's keys
-  satisfy an event's `requiredKeys`, the harness proposes flipping `verified` from
-  `false` to `true` — it does not flip it. Apply the proposal by hand, in the same
-  reviewed PR as the mismatch it came with.
+- The same rule governs `payloadShape.verified`: when a captured payload's keys satisfy
+  an event's `requiredKeys`, the harness proposes flipping `verified` from `false` to
+  `true` — it does not flip it. Apply the proposal by hand, in the same reviewed PR as
+  the mismatch it came with.
 - `pnpm conformance` is a maintainer-only, this-repository-only step. It is not run by
   CI, `pnpm test`, or `pnpm check`, and producing a fresh transcript first requires a
   real `claude` binary and network/session access — see "Producing a transcript" below.
@@ -82,7 +82,7 @@ something this repository automates:
    to check, whether the hook you configured actually fired, and any payloads you want a
    `payloadShape.verified` proposal for.
 3. Write the result as a transcript JSON document (see above) and pass it to the
-   harness: `pnpm conformance -- --transcript path/to/transcript.json`.
+   harness: `pnpm conformance --transcript path/to/transcript.json`.
 
 A script that extracts a transcript automatically from a raw `claude --debug` log is a
 plausible future enhancement, out of scope here.

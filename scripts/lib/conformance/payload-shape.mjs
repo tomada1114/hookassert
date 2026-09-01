@@ -1,6 +1,5 @@
 // Proposes flipping spec's per-event `payloadShape.verified` flag -- never
-// flips it. `#3` gave that field a reader; this issue is its only intended
-// writer, and even here the "write" is a printed proposal a human applies by
+// flips it. Even here, the "write" is a printed proposal a human applies by
 // hand in a reviewed pull request, exactly like a firing-set mismatch's
 // proposed diff (compare.mjs).
 

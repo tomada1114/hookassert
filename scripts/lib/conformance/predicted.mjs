@@ -10,6 +10,19 @@
 
 import { readKey } from "../json.mjs";
 
+/** Thrown when an `explain --format json` report does not carry a `firing` array. */
+export class ReportShapeError extends Error {
+  /**
+   * @param {string} reason - What was missing or malformed, and where.
+   */
+  constructor(reason) {
+    super(`ERR_CONFORMANCE_REPORT_SHAPE: ${reason}`);
+    this.name = "ReportShapeError";
+    /** @readonly */
+    this.code = "ERR_CONFORMANCE_REPORT_SHAPE";
+  }
+}
+
 /**
  * @typedef {object} FiringCase
  * @property {string} event - The hook event, e.g. "PreToolUse".
@@ -65,16 +78,16 @@ export function predictedCasesFromMatcherTable(matcherTable) {
  * plain data -- this module never imports that type).
  * @param {string} matcher - The matcher pattern the case under test declares.
  * @returns {boolean} True when a firing hook's `matcher` equals `matcher`.
- * @throws {Error} `ERR_CONFORMANCE_REPORT_SHAPE` when `explainReport` carries
- * no `firing` array at all -- a shape hookassert's own schema guarantees, so
- * seeing this means the built CLI or its `--format json` output changed
- * underneath this harness.
+ * @throws {ReportShapeError} `ERR_CONFORMANCE_REPORT_SHAPE` when
+ * `explainReport` carries no `firing` array at all -- a shape hookassert's
+ * own schema guarantees, so seeing this means the built CLI or its
+ * `--format json` output changed underneath this harness.
  */
 export function firedInExplainReport(explainReport, matcher) {
   const firing = readKey(explainReport, "firing");
   if (!Array.isArray(firing)) {
-    throw new Error(
-      "ERR_CONFORMANCE_REPORT_SHAPE: explain --format json report has no `firing` array.\n" +
+    throw new ReportShapeError(
+      "explain --format json report has no `firing` array.\n" +
         "Expected: JsonExplainReport (schema/report.schema.json).\n" +
         "Next: run `node dist/cli.js explain <event> <tool> --format json` directly and compare its shape.",
     );

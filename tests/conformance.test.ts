@@ -20,6 +20,7 @@ import { proposePayloadShapeVerification } from "../scripts/lib/conformance/payl
 import {
   firedInExplainReport,
   predictedCasesFromMatcherTable,
+  ReportShapeError,
 } from "../scripts/lib/conformance/predicted.mjs";
 import {
   normalizeTranscript,
@@ -190,10 +191,15 @@ describe("firedInExplainReport", () => {
     expect(firedInExplainReport(report, "Bash")).toBe(false);
   });
 
-  it("throws when the report carries no firing array at all", () => {
-    expect(() => firedInExplainReport({}, "Bash")).toThrow(
-      /ERR_CONFORMANCE_REPORT_SHAPE/,
-    );
+  it("throws ReportShapeError, with code ERR_CONFORMANCE_REPORT_SHAPE, when the report carries no firing array at all", () => {
+    expect(() => firedInExplainReport({}, "Bash")).toThrow(ReportShapeError);
+    try {
+      firedInExplainReport({}, "Bash");
+      expect.fail("expected firedInExplainReport to throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ReportShapeError);
+      expect((error as ReportShapeError).code).toBe("ERR_CONFORMANCE_REPORT_SHAPE");
+    }
   });
 });
 
@@ -251,7 +257,7 @@ describe("proposePayloadShapeVerification: a payload whose shape matches spec.re
         `fixture assumption broken: spec no longer declares events.${event}`,
       );
     }
-    expect(payloadShape.verified).toBe(false); // ground truth from #3, still false on disk
+    expect(payloadShape.verified).toBe(false); // still false in the committed spec
 
     const payload = readFixtureJson("session-start-payload.json") as Record<
       string,
@@ -360,6 +366,12 @@ describe("scripts/conformance.mjs: parseArguments", () => {
       specPath: "s.json",
     });
   });
+
+  it("skips a leading -- token, so `pnpm run conformance -- --transcript ...` still parses under pnpm 11", () => {
+    expect(parseArguments(["--", "--transcript", "t.json"])).toEqual({
+      transcriptPath: "t.json",
+    });
+  });
 });
 
 describe("scripts/conformance.mjs: singleHookSettings", () => {
@@ -412,31 +424,80 @@ describe("scripts/conformance.mjs: defaultSpecPath", () => {
 describe("scripts/conformance.mjs: runExplain (a real subprocess)", () => {
   const successCli = path.join(FIXTURES_DIR, "fake-explain-cli-success.mjs");
   const failureCli = path.join(FIXTURES_DIR, "fake-explain-cli-failure.mjs");
+  const echoCli = path.join(FIXTURES_DIR, "fake-explain-cli-echo-argv.mjs");
 
   it("parses the built CLI's JSON report on success", () => {
-    const report = runExplain(successCli, "settings.json", "PreToolUse", "Bash");
+    const report = runExplain(
+      successCli,
+      "settings.json",
+      "PreToolUse",
+      "Bash",
+      "2.1.255",
+    );
     expect(report).toEqual({ firing: [{ matcher: "Bash" }] });
   });
 
   it("throws ERR_CONFORMANCE_CLI_FAILED when the CLI exits non-zero", () => {
-    expect(() => runExplain(failureCli, "settings.json", "PreToolUse", "Bash")).toThrow(
-      /ERR_CONFORMANCE_CLI_FAILED/,
-    );
+    expect(() =>
+      runExplain(failureCli, "settings.json", "PreToolUse", "Bash", "2.1.255"),
+    ).toThrow(/ERR_CONFORMANCE_CLI_FAILED/);
+  });
+
+  it("passes --claude-version through to the CLI invocation", () => {
+    const report = runExplain(
+      echoCli,
+      "settings.json",
+      "PreToolUse",
+      "Bash",
+      "2.1.255",
+    ) as { argv: string[] };
+    expect(report.argv).toEqual([
+      "explain",
+      "PreToolUse",
+      "Bash",
+      "--settings",
+      "settings.json",
+      "--format",
+      "json",
+      "--claude-version",
+      "2.1.255",
+    ]);
   });
 });
 
 describe("scripts/conformance.mjs: defaultRunExplainCase (a real subprocess, end to end)", () => {
   it("writes a throwaway single-hook settings file, asks the given CLI, and cleans up", () => {
     const successCli = path.join(FIXTURES_DIR, "fake-explain-cli-success.mjs");
-    const fired = defaultRunExplainCase("PreToolUse", "Bash", "Bash", successCli);
+    const fired = defaultRunExplainCase(
+      "PreToolUse",
+      "Bash",
+      "Bash",
+      "2.1.255",
+      successCli,
+    );
     expect(fired).toBe(true);
   });
 
   it("still cleans up its temp directory when the CLI call throws", () => {
     const failureCli = path.join(FIXTURES_DIR, "fake-explain-cli-failure.mjs");
     expect(() =>
-      defaultRunExplainCase("PreToolUse", "Bash", "Bash", failureCli),
+      defaultRunExplainCase("PreToolUse", "Bash", "Bash", "2.1.255", failureCli),
     ).toThrow(ConformanceError);
+  });
+
+  it("points the child at a throwaway cwd and HOME rather than this repository's real root or the real home directory", () => {
+    const isolationCli = path.join(
+      FIXTURES_DIR,
+      "fake-explain-cli-checks-isolation.mjs",
+    );
+    const fired = defaultRunExplainCase(
+      "PreToolUse",
+      "Bash",
+      "Bash",
+      "2.1.255",
+      isolationCli,
+    );
+    expect(fired).toBe(true);
   });
 });
 
@@ -461,7 +522,24 @@ describe("scripts/conformance.mjs: main", () => {
     expect(logs.join("\n")).toContain("2 firing case(s) agree");
   });
 
+  it("passes the transcript's claudeVersion to runExplainCase for every case", () => {
+    const claudeVersions: unknown[] = [];
+    const code = main(
+      ["--transcript", path.join(FIXTURES_DIR, "small-agree-transcript.json")],
+      {
+        runExplainCase: (_event, _matcher, _tool, claudeVersion) => {
+          claudeVersions.push(claudeVersion);
+          return true;
+        },
+      },
+    );
+    expect(code).toBe(0);
+    expect(claudeVersions.length).toBeGreaterThan(0);
+    expect(claudeVersions).toEqual(claudeVersions.map(() => "2.1.255"));
+  });
+
   it("returns exit code 1 and prints a proposed diff on stderr when a case disagrees with the injected predictor", () => {
+    const specBefore = readFileSync(SPEC_PATH, "utf8");
     const logs: string[] = [];
     const errors: string[] = [];
     const code = main(
@@ -479,7 +557,7 @@ describe("scripts/conformance.mjs: main", () => {
     expect(combined).not.toContain("spec/claude-code");
     // never actually touches the spec file
     const specAfter = readFileSync(SPEC_PATH, "utf8");
-    expect(specAfter).toBe(readFileSync(SPEC_PATH, "utf8"));
+    expect(specAfter).toBe(specBefore);
   });
 
   it("prints a payload-shape proposal, without affecting the exit code, when the transcript carries a matching payload", () => {

@@ -24,7 +24,6 @@
 // pipeline -- is exercised directly by tests/conformance.test.ts through
 // `main`'s injectable dependencies, without a `claude` binary or `dist/`.
 
-import { spawnSync } from "node:child_process";
 import console from "node:console";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -34,7 +33,7 @@ import process from "node:process";
 import { compareFiringSets } from "./lib/conformance/compare.mjs";
 import { isMain } from "./lib/is-main.mjs";
 import { parseJson, readKey } from "./lib/json.mjs";
-import { repoRoot } from "./lib/node-tools.mjs";
+import { repoRoot, runNode } from "./lib/node-tools.mjs";
 import { proposePayloadShapeVerification } from "./lib/conformance/payload-shape.mjs";
 import { firedInExplainReport } from "./lib/conformance/predicted.mjs";
 import { normalizeTranscript } from "./lib/conformance/transcript.mjs";
@@ -62,7 +61,7 @@ function readPayloadShape(spec, event) {
   return { requiredKeys: requiredKeysRaw, verified };
 }
 
-const USAGE = `Usage: pnpm conformance -- --transcript <path.json> [--spec <path.json>]
+const USAGE = `Usage: pnpm conformance --transcript <path.json> [--spec <path.json>]
 
 Compares hookassert's predicted hook-firing set (from the built CLI, called
 as \`node dist/cli.js explain --format json\`) against a recorded transcript,
@@ -110,20 +109,27 @@ export class ConformanceError extends Error {
  * missing value, or a missing required `--transcript`.
  */
 export function parseArguments(argv) {
+  // pnpm 11's `pnpm run <script> -- <args>` forwards that `--` straight
+  // through as argv[0] rather than stripping it, unlike older pnpm and npm.
+  // A bare leading "--" therefore never names a flag itself, so drop it
+  // rather than reject it -- see docs/conformance/README.md's invocation
+  // example, which does not need it.
+  const args = argv[0] === "--" ? argv.slice(1) : argv;
+
   /** @type {string | undefined} */
   let transcriptPath;
   /** @type {string | undefined} */
   let specPath;
 
-  for (let index = 0; index < argv.length; index += 1) {
-    const flag = argv[index];
+  for (let index = 0; index < args.length; index += 1) {
+    const flag = args[index];
     if (flag !== "--transcript" && flag !== "--spec") {
       throw new ConformanceError(
         "ERR_CONFORMANCE_ARGUMENT",
         `unknown option: ${String(flag)}\n\n${USAGE}`,
       );
     }
-    const value = argv[index + 1];
+    const value = args[index + 1];
     if (value === undefined || value.startsWith("--")) {
       throw new ConformanceError(
         "ERR_CONFORMANCE_ARGUMENT",
@@ -190,6 +196,14 @@ export function defaultSpecPath(root) {
 }
 
 /**
+ * @typedef {object} RunExplainOptions
+ * @property {string} [cwd] - Working directory for the child; defaults to
+ * `repoRoot`.
+ * @property {NodeJS.ProcessEnv} [env] - Environment for the child; defaults
+ * to this process's own.
+ */
+
+/**
  * Run the built CLI's `explain` command as a subprocess and parse its JSON
  * report. The one function in this file that actually spawns a process --
  * exercised only by a real `pnpm conformance` run against a built `dist/`,
@@ -200,23 +214,37 @@ export function defaultSpecPath(root) {
  * @param {string} settingsPath - Absolute path of a single-hook settings file.
  * @param {string} event
  * @param {string} tool
+ * @param {string} claudeVersion - Passed as `--claude-version`, so a
+ * version-gated matcher (comma/hyphen notation) is predicted against the
+ * transcript's own recorded version rather than as undetermined.
+ * @param {RunExplainOptions} [options]
  * @returns {unknown} The parsed `JsonExplainReport`.
- * @throws {ConformanceError} `ERR_CONFORMANCE_CLI_SPAWN` when the CLI could
- * not run at all (for example, `dist/cli.js` is missing); `ERR_CONFORMANCE_CLI_FAILED`
- * when it ran but exited non-zero.
+ * @throws {ConformanceError} `ERR_CONFORMANCE_CLI_FAILED` when the CLI could
+ * not run at all, or ran but exited non-zero.
  */
-export function runExplain(cliEntry, settingsPath, event, tool) {
-  const result = spawnSync(
-    process.execPath,
-    [cliEntry, "explain", event, tool, "--settings", settingsPath, "--format", "json"],
-    { cwd: repoRoot, encoding: "utf8", env: process.env },
+export function runExplain(
+  cliEntry,
+  settingsPath,
+  event,
+  tool,
+  claudeVersion,
+  options = {},
+) {
+  const result = runNode(
+    cliEntry,
+    [
+      "explain",
+      event,
+      tool,
+      "--settings",
+      settingsPath,
+      "--format",
+      "json",
+      "--claude-version",
+      claudeVersion,
+    ],
+    { cwd: options.cwd ?? repoRoot, env: options.env ?? process.env },
   );
-  if (result.error !== undefined) {
-    throw new ConformanceError(
-      "ERR_CONFORMANCE_CLI_SPAWN",
-      `could not run ${cliEntry}: ${result.error.message}\nNext: run \`pnpm build\` and retry.`,
-    );
-  }
   if (result.status !== 0) {
     throw new ConformanceError(
       "ERR_CONFORMANCE_CLI_FAILED",
@@ -229,12 +257,22 @@ export function runExplain(cliEntry, settingsPath, event, tool) {
 /**
  * Ask the built CLI, for real, whether a hook declaring `matcher` fires for
  * `tool` on `event`: writes a throwaway single-hook settings file, calls
- * {@link runExplain} against it, and cleans the temporary directory up
+ * {@link runExplain} against it, and cleans the temporary directories up
  * whether or not that call throws.
+ *
+ * @remarks
+ * The child is pointed at the mkdtemp directory the settings file lives in
+ * (as `cwd`) and at a second, empty mkdtemp directory (as `HOME`), so
+ * `--settings` is the only settings layer it can find: `--settings` is an
+ * additive explicit layer, so without this the child would also pick up the
+ * invoking maintainer's real `~/.claude/settings.json` and this repository's
+ * own `.claude/settings.json`/`settings.local.json`, and the prediction would
+ * no longer depend only on the generated single-hook file.
  *
  * @param {string} event
  * @param {string} matcher
  * @param {string} tool
+ * @param {string} claudeVersion
  * @param {string} [cliEntry] - Absolute path of the built CLI; defaults to
  * `dist/cli.js`. Overridable so tests can point this at a stand-in script
  * instead of a real built `dist/`.
@@ -244,9 +282,11 @@ export function defaultRunExplainCase(
   event,
   matcher,
   tool,
+  claudeVersion,
   cliEntry = path.join(repoRoot, "dist", "cli.js"),
 ) {
   const dir = mkdtempSync(path.join(tmpdir(), "hookassert-conformance-"));
+  const home = mkdtempSync(path.join(tmpdir(), "hookassert-conformance-home-"));
   try {
     const settingsPath = path.join(dir, "settings.json");
     writeFileSync(
@@ -254,10 +294,14 @@ export function defaultRunExplainCase(
       JSON.stringify(singleHookSettings(event, matcher)),
       "utf8",
     );
-    const report = runExplain(cliEntry, settingsPath, event, tool);
+    const report = runExplain(cliEntry, settingsPath, event, tool, claudeVersion, {
+      cwd: dir,
+      env: { ...process.env, HOME: home },
+    });
     return firedInExplainReport(report, matcher);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
   }
 }
 
@@ -265,7 +309,7 @@ export function defaultRunExplainCase(
  * @typedef {object} ConformanceDeps
  * @property {(path: string) => string} [readFile]
  * @property {() => string} [resolveSpecPath]
- * @property {(event: string, matcher: string, tool: string) => boolean} [runExplainCase]
+ * @property {(event: string, matcher: string, tool: string, claudeVersion: string) => boolean} [runExplainCase]
  * @property {(text: string) => void} [log]
  * @property {(text: string) => void} [logError]
  */
@@ -303,7 +347,12 @@ export function main(argv, deps = {}) {
       event: observed.event,
       matcher: observed.matcher,
       tool: observed.tool,
-      fired: runExplainCase(observed.event, observed.matcher, observed.tool),
+      fired: runExplainCase(
+        observed.event,
+        observed.matcher,
+        observed.tool,
+        transcript.claudeVersion,
+      ),
     }));
     const comparison = compareFiringSets(predictedCases, transcript.firingObservations);
 
