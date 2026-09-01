@@ -363,7 +363,7 @@ export interface StopRecordResult {
  * @throws {RecordNoSessionError} no session file was found at
  * {@link sessionFilePath}.
  * @throws {RecordRestoreError} a session file was found but could not be
- * used (unparseable JSON, or missing required fields), or the fallback
+ * used (unparsable JSON, or missing required fields), or the fallback
  * inverse edit's result does not match the stored pre-image byte-for-byte
  * (the settings file was edited by hand while recording was active) — in
  * the last case, the mismatch is reported only after the capture hook has
