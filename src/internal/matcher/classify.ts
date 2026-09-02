@@ -21,6 +21,11 @@
  * `findCatastrophicConstruct` before it is ever handed to `new RegExp` —
  * see that module's own remarks for why a nested unbounded quantifier
  * degrades to `"unknown"` here instead of being compiled and run.
+ *
+ * `exactListPattern` and `narrowExactListPattern` themselves are compiled
+ * with `new RegExp` below without a try/catch: `spec/guards.ts`'s
+ * `validateSpec` already rejects an uncompilable pattern at load time, so a
+ * `Spec` reaching this module is guaranteed to carry one that compiles.
  */
 
 import type { EventName } from "../../types.js";

@@ -24,7 +24,8 @@
     "claudeCodeRange": {
       "type": "string",
       "minLength": 1,
-      "description": "The Claude Code version range this file's facts were transcribed against, as a space-separated list of comparator expressions (e.g. \">=2.1.251 <2.2.0\")."
+      "pattern": "^(>=|<=|>|<|=)\\d+\\.\\d+\\.\\d+(?:\\s+(>=|<=|>|<|=)\\d+\\.\\d+\\.\\d+)*$",
+      "description": "The Claude Code version range this file's facts were transcribed against, as a space-separated list of comparator expressions (e.g. \">=2.1.251 <2.2.0\"). Deliberately narrow: no npm range operators (\"^\", \"~\", \"x\", \"||\")."
     },
     "defaults": {
       "type": "object",
@@ -68,12 +69,20 @@
       ],
       "properties": {
         "caseSensitive": { "type": "boolean" },
-        "exactListPattern": { "type": "string", "minLength": 1 },
+        "exactListPattern": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Must also compile as a JavaScript regular expression. This schema cannot express that check (JSON Schema draft-07 has no `format: \"regex\"` without the `ajv-formats` dependency, which this repository deliberately does not add) — `validateSpec` (guards.ts) enforces it instead."
+        },
         "narrowExactMatchEvents": {
           "type": "array",
           "items": { "type": "string", "minLength": 1 }
         },
-        "narrowExactListPattern": { "type": "string", "minLength": 1 },
+        "narrowExactListPattern": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Must also compile as a JavaScript regular expression. This schema cannot express that check (JSON Schema draft-07 has no `format: \"regex\"` without the `ajv-formats` dependency, which this repository deliberately does not add) — `validateSpec` (guards.ts) enforces it instead."
+        },
         "rules": {
           "type": "array",
           "items": {
@@ -82,7 +91,11 @@
             "required": ["id", "sinceVersion"],
             "properties": {
               "id": { "type": "string", "minLength": 1 },
-              "sinceVersion": { "type": "string", "minLength": 1 }
+              "sinceVersion": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^\\d+\\.\\d+\\.\\d+$"
+              }
             }
           }
         }
@@ -221,7 +234,8 @@
           "items": { "type": "string" }
         },
         "sinceVersion": {
-          "type": ["string", "null"]
+          "type": ["string", "null"],
+          "pattern": "^\\d+\\.\\d+\\.\\d+$"
         }
       }
     }
