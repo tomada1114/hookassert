@@ -14,9 +14,11 @@
 
 import type {
   CaseResult,
+  DecidingHook,
   EventName,
   ExpectationDiff,
   NonFiringExplanation,
+  PayloadOrigin,
   Summary,
   UnknownReason,
 } from "../../types.js";
@@ -39,6 +41,17 @@ export interface TestCaseReport {
 
   /** What `assertCase` produced for this case. */
   readonly result: CaseResult;
+
+  /**
+   * How many hooks fired for this case.
+   *
+   * @remarks
+   * Not part of `CaseResult` itself — it exists here only so
+   * `renderCaseLine` can gate its `— decided by …` annotation on more than
+   * one hook having fired, without `CaseResult` carrying a count nothing
+   * else needs.
+   */
+  readonly firedCount: number;
 }
 
 /** The full result `test <fixture>...` renders. */
@@ -111,6 +124,27 @@ function describeDiff(diff: ExpectationDiff): string {
   }
 }
 
+/** `<command> (<file>:<line>)` for the hook a multi-hook case's verdict came from. */
+function describeDecidedBy(decidedBy: DecidingHook): string {
+  const { hook } = decidedBy;
+  return `${hook.command} (${hook.provenance.file}:${String(hook.provenance.line)})`;
+}
+
+/**
+ * ` — decided by …` suffix for a `FAIL`/`UNKNOWN` line, shown only when more
+ * than one hook fired for the case — naming the hook for a single-hook case
+ * would just repeat what the line already says.
+ */
+function decidedBySuffix(
+  report: TestCaseReport,
+  decidedBy: DecidingHook | undefined,
+): string {
+  if (decidedBy === undefined || report.firedCount <= 1) {
+    return "";
+  }
+  return ` — decided by ${describeDecidedBy(decidedBy)}`;
+}
+
 /** One human-readable line per {@link TestCaseReport}, for `renderTestPretty`. */
 function renderCaseLine(report: TestCaseReport): string {
   const label = caseLabel(report);
@@ -120,14 +154,16 @@ function renderCaseLine(report: TestCaseReport): string {
       return `PASS  ${label}`;
     case "skipped":
       return `SKIP  ${label} (${result.reason})`;
-    case "unknown":
-      return `UNKNOWN ${label} — ${result.reasons.map(describeUnknownReason).join("; ")}`;
+    case "unknown": {
+      const reasons = result.reasons.map(describeUnknownReason).join("; ");
+      return `UNKNOWN ${label} — ${reasons}${decidedBySuffix(report, result.decidedBy)}`;
+    }
     case "fail": {
       const detail =
         result.nonFiring === undefined
           ? result.diffs.map(describeDiff).join("; ")
           : describeNonFiring(result.nonFiring);
-      return `FAIL  ${label} — ${detail}`;
+      return `FAIL  ${label} — ${detail}${decidedBySuffix(report, result.decidedBy)}`;
     }
   }
 }
@@ -162,13 +198,78 @@ export function renderTestPretty(report: TestReport): string {
   return `${lines.join("\n")}\n`;
 }
 
+/**
+ * `CaseResult`, with `decidedBy` normalized to `null` rather than dropped
+ * when absent.
+ *
+ * @remarks
+ * `JSON.stringify` omits an object property whose value is `undefined`
+ * rather than emitting `null` for it, so `CaseResult.decidedBy` would
+ * silently vanish from a `"pass"`/`"unknown"` result's JSON rather than
+ * appearing as the explicit `null` a consumer can rely on being present.
+ * `toJsonCaseResult` is the one place that substitution happens.
+ */
+type JsonCaseResult =
+  | {
+      readonly kind: "pass";
+      readonly origin: PayloadOrigin;
+      readonly decidedBy: DecidingHook | null;
+    }
+  | {
+      readonly kind: "fail";
+      readonly origin: PayloadOrigin;
+      readonly diffs: readonly ExpectationDiff[];
+      readonly nonFiring: NonFiringExplanation | undefined;
+      readonly decidedBy: DecidingHook | null;
+    }
+  | {
+      readonly kind: "unknown";
+      readonly origin: PayloadOrigin;
+      readonly reasons: readonly [UnknownReason, ...UnknownReason[]];
+      readonly decidedBy: DecidingHook | null;
+    }
+  | {
+      readonly kind: "skipped";
+      readonly origin: PayloadOrigin;
+      readonly reason: "dry-run" | "stub-only";
+    };
+
+/** Build the {@link JsonCaseResult} `renderTestJson` emits for one `CaseResult`. */
+function toJsonCaseResult(result: CaseResult): JsonCaseResult {
+  switch (result.kind) {
+    case "pass":
+      return {
+        kind: "pass",
+        origin: result.origin,
+        decidedBy: result.decidedBy ?? null,
+      };
+    case "fail":
+      return {
+        kind: "fail",
+        origin: result.origin,
+        diffs: result.diffs,
+        nonFiring: result.nonFiring,
+        decidedBy: result.decidedBy ?? null,
+      };
+    case "unknown":
+      return {
+        kind: "unknown",
+        origin: result.origin,
+        reasons: result.reasons,
+        decidedBy: result.decidedBy ?? null,
+      };
+    case "skipped":
+      return { kind: "skipped", origin: result.origin, reason: result.reason };
+  }
+}
+
 /** JSON-serializable shape one {@link TestCaseReport} renders to. */
 interface JsonTestCaseReport {
   readonly file: string;
   readonly index: number;
   readonly event: EventName;
   readonly tool: string | null;
-  readonly result: CaseResult;
+  readonly result: JsonCaseResult;
 }
 
 /**
@@ -209,7 +310,7 @@ export function toJsonTestReport(report: TestReport): JsonTestReport {
       index: caseReport.index,
       event: caseReport.event,
       tool: caseReport.tool ?? null,
-      result: caseReport.result,
+      result: toJsonCaseResult(caseReport.result),
     })),
     summary: report.summary,
   };
@@ -228,7 +329,11 @@ export function renderTestJson(report: TestReport): string {
  * A fixture case carries no line number of its own the way a `ResolvedHook`
  * does through `Provenance` — `fixture/load.ts` never records one — so every
  * annotation points at line 1 of its fixture file, identified instead by the
- * case's own 0-based index and event/target in the annotation's title.
+ * case's own 0-based index and event/target in the annotation's title,
+ * *unless* the failure names a `decidedBy` hook — a hook fired and its own
+ * `Decision` decided the case's verdict — in which case the annotation
+ * points at that hook's own `Provenance` instead, the more actionable
+ * location.
  */
 export function renderTestGithub(report: TestReport, workspaceRoot: string): string {
   const lines: string[] = [renderGithubHeader(report.header)];
@@ -237,15 +342,23 @@ export function renderTestGithub(report: TestReport, workspaceRoot: string): str
     if (caseReport.result.kind !== "fail") {
       continue;
     }
+    const { result } = caseReport;
     const detail =
-      caseReport.result.nonFiring === undefined
-        ? caseReport.result.diffs.map(describeDiff).join("; ")
-        : describeNonFiring(caseReport.result.nonFiring);
+      result.nonFiring === undefined
+        ? result.diffs.map(describeDiff).join("; ")
+        : describeNonFiring(result.nonFiring);
+    const location =
+      result.decidedBy === undefined
+        ? { file: caseReport.file, line: 1 }
+        : {
+            file: result.decidedBy.hook.provenance.file,
+            line: result.decidedBy.hook.provenance.line,
+          };
     lines.push(
       renderGithubFinding(
         {
-          file: caseReport.file,
-          line: 1,
+          file: location.file,
+          line: location.line,
           title: `test case #${String(caseReport.index)}: ${caseLabel(caseReport)}`,
           message: detail,
         },

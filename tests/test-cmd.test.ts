@@ -4,7 +4,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { runCli, type CliDeps } from "../src/cli.js";
 import { NodeSpawner } from "../src/internal/exec/spawner.js";
@@ -163,10 +163,22 @@ interface JsonTestSummary {
   readonly skipped: number;
 }
 
+interface JsonDecidedBy {
+  readonly hook: {
+    readonly command: string;
+    readonly provenance: { readonly layer: string; readonly file: string };
+  };
+  readonly decision: { readonly kind: string };
+}
+
 interface JsonTestCase {
   readonly event: string;
   readonly tool: string | null;
-  readonly result: { readonly kind: string; readonly reason?: string };
+  readonly result: {
+    readonly kind: string;
+    readonly reason?: string;
+    readonly decidedBy?: JsonDecidedBy | null;
+  };
 }
 
 interface JsonTestReportShape {
@@ -248,6 +260,9 @@ describe("the full pipeline", () => {
     );
     expect(pretty.stdout).toContain('decision: expected "allow", got "deny"');
     expect(pretty.stdout).toContain("no hook is declared under SessionStart");
+    // Exactly one hook fired for each case here — pretty only names the
+    // deciding hook once more than one fired for the same case.
+    expect(pretty.stdout).not.toContain("decided by");
 
     const github = await runCli(
       [
@@ -265,6 +280,201 @@ describe("the full pipeline", () => {
     expect(github.stdout).toContain("::error file=");
     expect(github.stdout).toContain("test case #0");
     expect(github.stdout).toContain("test case #1");
+  });
+});
+
+describe("combining more than one firing hook (issue #42)", () => {
+  // A dedicated project/home pair per test, isolated from the shared
+  // projectDir's own settings.json: two hooks (one per settings layer) fire
+  // for the same case, and only one of them denies — proving `test` folds
+  // every firing hook's Decision (any deny wins) rather than reading back
+  // only the first one.
+  let multiHookProjectDir: string;
+  let multiHookHomeDir: string;
+
+  afterEach(() => {
+    rmSync(multiHookProjectDir, { recursive: true, force: true });
+    rmSync(multiHookHomeDir, { recursive: true, force: true });
+  });
+
+  function settingsDeclaring(script: string): unknown {
+    return {
+      hooks: {
+        PreToolUse: [
+          {
+            matcher: "Bash",
+            hooks: [{ type: "command", command: process.execPath, args: [script] }],
+          },
+        ],
+      },
+    };
+  }
+
+  /** One hook in the user layer, one in the project layer, each running `userScript`/`projectScript`. */
+  function setUpTwoLayers(userScript: string, projectScript: string): void {
+    multiHookProjectDir = mkdtempSync(
+      path.join(tmpdir(), "hookassert-multi-hook-project-"),
+    );
+    multiHookHomeDir = mkdtempSync(path.join(tmpdir(), "hookassert-multi-hook-home-"));
+    mkdirSync(path.join(multiHookProjectDir, ".claude"), { recursive: true });
+    mkdirSync(path.join(multiHookHomeDir, ".claude"), { recursive: true });
+    writeFileSync(
+      path.join(multiHookHomeDir, ".claude", "settings.json"),
+      JSON.stringify(settingsDeclaring(userScript), null, 2),
+    );
+    writeFileSync(
+      path.join(multiHookProjectDir, ".claude", "settings.json"),
+      JSON.stringify(settingsDeclaring(projectScript), null, 2),
+    );
+  }
+
+  function multiHookFixturePath(): string {
+    const filePath = path.join(multiHookProjectDir, "fixture.yaml");
+    writeFileSync(
+      filePath,
+      JSON.stringify(
+        {
+          cases: [{ event: "PreToolUse", tool: "Bash", expect: { decision: "pass" } }],
+        },
+        null,
+        2,
+      ),
+    );
+    return filePath;
+  }
+
+  const denyOutcomes = new Map<string, FakeOutcome>([
+    [EXIT2_STDERR, { exitCode: 2, stderr: "blocked by policy\n" }],
+  ]);
+
+  it("a project-layer deny behind a user-layer pass is reported as failing, not passing", async () => {
+    setUpTwoLayers(EXIT0_SILENT, EXIT2_STDERR);
+    const fixturePath = multiHookFixturePath();
+    const spawner = new FakeSpawner(denyOutcomes);
+
+    const result = await runCli(
+      ["test", fixturePath, "--claude-version", "2.1.300", "--yes", "--format", "json"],
+      "hookassert",
+      testDeps({
+        cwd: multiHookProjectDir,
+        home: multiHookHomeDir,
+        spawner,
+      }),
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(spawner.calls).toHaveLength(2);
+    const report = parseJsonReport(result.stdout);
+    expect(report.cases[0]?.result.kind).toBe("fail");
+    expect(report.cases[0]?.result.decidedBy?.decision.kind).toBe("deny");
+    expect(report.cases[0]?.result.decidedBy?.hook.provenance.layer).toBe("project");
+  });
+
+  it("the verdict is identical when the two hooks' settings layers are swapped", async () => {
+    setUpTwoLayers(EXIT2_STDERR, EXIT0_SILENT);
+    const fixturePath = multiHookFixturePath();
+    const spawner = new FakeSpawner(denyOutcomes);
+
+    const result = await runCli(
+      ["test", fixturePath, "--claude-version", "2.1.300", "--yes", "--format", "json"],
+      "hookassert",
+      testDeps({
+        cwd: multiHookProjectDir,
+        home: multiHookHomeDir,
+        spawner,
+      }),
+    );
+
+    expect(result.exitCode).toBe(1);
+    const report = parseJsonReport(result.stdout);
+    expect(report.cases[0]?.result.kind).toBe("fail");
+    expect(report.cases[0]?.result.decidedBy?.decision.kind).toBe("deny");
+    expect(report.cases[0]?.result.decidedBy?.hook.provenance.layer).toBe("user");
+  });
+
+  it("a second hook that times out while the first did not still sets expect.timedOut's actual value to true", async () => {
+    // Two distinct scripts, one per layer: identical declarations across
+    // layers collapse into a single dedupeKey (settings/merge.ts), which
+    // would leave only one hook firing here.
+    setUpTwoLayers(EXIT0_SILENT, PRINT_ARGV);
+    const filePath = path.join(multiHookProjectDir, "fixture-timeout.yaml");
+    writeFileSync(
+      filePath,
+      JSON.stringify(
+        {
+          cases: [
+            {
+              event: "PreToolUse",
+              tool: "Bash",
+              expect: { timedOut: true },
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    );
+
+    class TimeoutOnSecondSpawner implements Spawner {
+      readonly calls: SpawnRequest[] = [];
+      spawn(req: SpawnRequest): Promise<ExecOutcome> {
+        this.calls.push(req);
+        const timedOut = this.calls.length > 1;
+        return Promise.resolve({ exitCode: 0, stdout: "", stderr: "", timedOut });
+      }
+    }
+    const spawner = new TimeoutOnSecondSpawner();
+
+    const result = await runCli(
+      ["test", filePath, "--claude-version", "2.1.300", "--yes", "--format", "json"],
+      "hookassert",
+      testDeps({ cwd: multiHookProjectDir, home: multiHookHomeDir, spawner }),
+    );
+
+    expect(spawner.calls).toHaveLength(2);
+    const report = parseJsonReport(result.stdout);
+    expect(report.cases[0]?.result.kind).toBe("pass");
+  });
+
+  it("the pretty and github reporters name the deciding hook only when more than one hook fired", async () => {
+    setUpTwoLayers(EXIT0_SILENT, EXIT2_STDERR);
+    const fixturePath = multiHookFixturePath();
+
+    const pretty = await runCli(
+      ["test", fixturePath, "--claude-version", "2.1.300", "--yes"],
+      "hookassert",
+      testDeps({
+        cwd: multiHookProjectDir,
+        home: multiHookHomeDir,
+        spawner: new FakeSpawner(denyOutcomes),
+      }),
+    );
+    expect(pretty.stdout).toContain("decided by");
+    // The deciding hook is the project-layer one (it declares EXIT2_STDERR here).
+    expect(pretty.stdout).toContain(
+      path.join(multiHookProjectDir, ".claude", "settings.json"),
+    );
+
+    const github = await runCli(
+      [
+        "test",
+        fixturePath,
+        "--claude-version",
+        "2.1.300",
+        "--yes",
+        "--format",
+        "github",
+      ],
+      "hookassert",
+      testDeps({
+        cwd: multiHookProjectDir,
+        home: multiHookHomeDir,
+        spawner: new FakeSpawner(denyOutcomes),
+      }),
+    );
+    // The deciding hook's own settings file (project layer, under cwd) is
+    // annotated instead of line 1 of the fixture.
+    expect(github.stdout).toContain("file=.claude/settings.json");
   });
 });
 

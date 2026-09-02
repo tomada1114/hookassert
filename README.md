@@ -62,9 +62,10 @@ hookassert --help
   milliseconds for hooks that declare none (a fixture file's own `defaults.timeoutMs`
   still wins over it), and a repeatable `--env <NAME>` opts one ambient environment
   variable into every spawned hook's environment by name — a value is never accepted
-  here, only a name. Exits `0` when every case passes (and, with `--ci`, none is
-  `unknown` either), `1` when at least one fails, and `3` when there are no failures but
-  `--ci` was given and at least one case is `unknown`.
+  here, only a name. When several hooks fire for one case, any deny wins; the report
+  names the hook that decided. Exits `0` when every case passes (and, with `--ci`, none
+  is `unknown` either), `1` when at least one fails, and `3` when there are no failures
+  but `--ci` was given and at least one case is `unknown`.
 
 ## API
 

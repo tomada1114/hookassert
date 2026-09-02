@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import { assertCase, summarize } from "../src/internal/assert/index.js";
-import type { CaseObservation } from "../src/internal/assert/index.js";
+import type { CaseObservation, FiredHook } from "../src/internal/assert/index.js";
 import type { FixtureCase, FixtureExpectation } from "../src/internal/fixture/index.js";
 import type { MatcherOutcome } from "../src/internal/matcher/index.js";
 import type {
   CaseResult,
+  Decision,
   EventName,
   ExecOutcome,
   PayloadOrigin,
@@ -75,23 +76,38 @@ function makeCase(overrides: Partial<FixtureCase> = {}): FixtureCase {
   };
 }
 
+function makeExecOutcome(overrides: Partial<ExecOutcome> = {}): ExecOutcome {
+  return { exitCode: 0, stdout: "", stderr: "", timedOut: false, ...overrides };
+}
+
+function makeFired(overrides: Partial<FiredHook> = {}): FiredHook {
+  return {
+    hook: makeHook(),
+    execOutcome: makeExecOutcome(),
+    decision: { kind: "pass", exitCode: 0 },
+    ...overrides,
+  };
+}
+
 function makeObservation(overrides: Partial<CaseObservation> = {}): CaseObservation {
   return {
-    decision: undefined,
-    execOutcome: undefined,
+    fired: [],
     rejectedByMatcher: [],
     excludedHooks: [],
     ...overrides,
   };
 }
 
-function makeExecOutcome(overrides: Partial<ExecOutcome> = {}): ExecOutcome {
-  return { exitCode: 0, stdout: "", stderr: "", timedOut: false, ...overrides };
-}
-
 function expectFail(result: CaseResult): Extract<CaseResult, { kind: "fail" }> {
   if (result.kind !== "fail") {
     throw new Error(`expected a fail CaseResult, got ${result.kind}`);
+  }
+  return result;
+}
+
+function expectPass(result: CaseResult): Extract<CaseResult, { kind: "pass" }> {
+  if (result.kind !== "pass") {
+    throw new Error(`expected a pass CaseResult, got ${result.kind}`);
   }
   return result;
 }
@@ -114,7 +130,7 @@ describe("assertCase: expectation diffing", () => {
   it("a case whose hook fired but returned a different decision than expected produces a fail CaseResult with a non-empty diffs array", () => {
     const caseData = makeCase({ expect: makeExpect({ decision: "deny" }) });
     const observation = makeObservation({
-      decision: { kind: "pass", exitCode: 0 },
+      fired: [makeFired({ decision: { kind: "pass", exitCode: 0 } })],
     });
 
     const result = expectFail(assertCase(caseData, observation));
@@ -126,7 +142,7 @@ describe("assertCase: expectation diffing", () => {
   it("the diff data is sufficient to render 'expected deny / actual pass' style text", () => {
     const caseData = makeCase({ expect: makeExpect({ decision: "deny" }) });
     const observation = makeObservation({
-      decision: { kind: "pass", exitCode: 0 },
+      fired: [makeFired({ decision: { kind: "pass", exitCode: 0 } })],
     });
 
     const result = expectFail(assertCase(caseData, observation));
@@ -161,8 +177,7 @@ describe("assertCase: expectation diffing", () => {
     (field, expectation, decision) => {
       const caseData = makeCase({ expect: expectation });
       const observation = makeObservation({
-        decision,
-        execOutcome: makeExecOutcome(),
+        fired: [makeFired({ decision })],
       });
 
       const result = expectFail(assertCase(caseData, observation));
@@ -183,13 +198,17 @@ describe("assertCase: expectation diffing", () => {
       }),
     });
     const observation = makeObservation({
-      decision: { kind: "deny", source: "exit-code", exitCode: 2 },
-      execOutcome: makeExecOutcome({
-        exitCode: 2,
-        stdout: "action blocked by policy",
-        stderr: "reason: not allowed",
-        timedOut: false,
-      }),
+      fired: [
+        makeFired({
+          decision: { kind: "deny", source: "exit-code", exitCode: 2 },
+          execOutcome: makeExecOutcome({
+            exitCode: 2,
+            stdout: "action blocked by policy",
+            stderr: "reason: not allowed",
+            timedOut: false,
+          }),
+        }),
+      ],
     });
 
     const result = assertCase(caseData, observation);
@@ -203,21 +222,150 @@ describe("assertCase: expectation diffing", () => {
 
     expect(result.kind).toBe("pass");
   });
+});
 
-  it("expect.timedOut defaults the actual value to false when the fired hook carries no execOutcome", () => {
-    const caseData = makeCase({ expect: makeExpect({ timedOut: true }) });
+describe("assertCase: multiple firing hooks", () => {
+  it("a second hook's deny wins over a first hook's pass, regardless of firing order", () => {
+    const caseData = makeCase({ expect: makeExpect({ decision: "pass" }) });
+    const firstHook = makeHook({ command: "./first.sh" });
+    const secondHook = makeHook({ command: "./second.sh" });
     const observation = makeObservation({
-      decision: { kind: "allow", exitCode: 0 },
-      execOutcome: undefined,
+      fired: [
+        makeFired({ hook: firstHook, decision: { kind: "pass", exitCode: 0 } }),
+        makeFired({
+          hook: secondHook,
+          decision: { kind: "deny", source: "exit-code", exitCode: 2 },
+        }),
+      ],
+    });
+
+    const result = expectFail(assertCase(caseData, observation));
+
+    expect(result.diffs).toContainEqual({
+      field: "decision",
+      expectedDecision: "pass",
+      actualDecision: "deny",
+    });
+    expect(result.decidedBy?.hook).toBe(secondHook);
+    expect(result.decidedBy?.decision).toEqual({
+      kind: "deny",
+      source: "exit-code",
+      exitCode: 2,
+    });
+  });
+
+  it("a first hook's deny still wins over a second hook's pass", () => {
+    const caseData = makeCase({ expect: makeExpect({ decision: "pass" }) });
+    const firstHook = makeHook({ command: "./first.sh" });
+    const secondHook = makeHook({ command: "./second.sh" });
+    const observation = makeObservation({
+      fired: [
+        makeFired({
+          hook: firstHook,
+          decision: { kind: "deny", source: "exit-code", exitCode: 2 },
+        }),
+        makeFired({ hook: secondHook, decision: { kind: "pass", exitCode: 0 } }),
+      ],
+    });
+
+    const result = expectFail(assertCase(caseData, observation));
+
+    expect(result.decidedBy?.hook).toBe(firstHook);
+  });
+
+  it("a second hook timing out sets timedOut: true even though the first hook did not", () => {
+    const caseData = makeCase({ expect: makeExpect({ timedOut: false }) });
+    const observation = makeObservation({
+      fired: [
+        makeFired({
+          decision: { kind: "pass", exitCode: 0 },
+          execOutcome: makeExecOutcome({ timedOut: false }),
+        }),
+        makeFired({
+          decision: { kind: "pass", exitCode: 0 },
+          execOutcome: makeExecOutcome({ timedOut: true }),
+        }),
+      ],
     });
 
     const result = expectFail(assertCase(caseData, observation));
 
     expect(result.diffs).toContainEqual({
       field: "timedOut",
-      expectedTimedOut: true,
-      actualTimedOut: false,
+      expectedTimedOut: false,
+      actualTimedOut: true,
     });
+  });
+
+  it("two hooks agreeing on the same Decision kind produce a pass CaseResult, decided by the first", () => {
+    const caseData = makeCase({ expect: makeExpect({ decision: "allow" }) });
+    const firstHook = makeHook({ command: "./first.sh" });
+    const secondHook = makeHook({ command: "./second.sh" });
+    const observation = makeObservation({
+      fired: [
+        makeFired({ hook: firstHook, decision: { kind: "allow", exitCode: 0 } }),
+        makeFired({ hook: secondHook, decision: { kind: "allow", exitCode: 0 } }),
+      ],
+    });
+
+    const result = expectPass(assertCase(caseData, observation));
+
+    expect(result.decidedBy?.hook).toBe(firstHook);
+  });
+
+  it("expect.stdoutContains is satisfied when only the second hook's stdout carries the substring", () => {
+    const caseData = makeCase({
+      expect: makeExpect({ stdoutContains: "only in the second hook" }),
+    });
+    const observation = makeObservation({
+      fired: [
+        makeFired({
+          decision: { kind: "allow", exitCode: 0 },
+          execOutcome: makeExecOutcome({ stdout: "first hook's own output" }),
+        }),
+        makeFired({
+          decision: { kind: "allow", exitCode: 0 },
+          execOutcome: makeExecOutcome({ stdout: "only in the second hook's output" }),
+        }),
+      ],
+    });
+
+    const result = expectPass(assertCase(caseData, observation));
+
+    expect(result.kind).toBe("pass");
+  });
+
+  it("expect.stdoutContains fails when no firing hook's stdout carries the substring", () => {
+    const caseData = makeCase({
+      expect: makeExpect({ stdoutContains: "nowhere to be found" }),
+    });
+    const observation = makeObservation({
+      fired: [
+        makeFired({ execOutcome: makeExecOutcome({ stdout: "first" }) }),
+        makeFired({ execOutcome: makeExecOutcome({ stdout: "second" }) }),
+      ],
+    });
+
+    const result = expectFail(assertCase(caseData, observation));
+
+    expect(result.diffs.some((diff) => diff.field === "stdoutContains")).toBe(true);
+  });
+
+  it("decidedBy is undefined when nothing fired at all", () => {
+    const caseData = makeCase();
+    const result = expectPass(assertCase(caseData, makeObservation()));
+
+    expect(result.decidedBy).toBeUndefined();
+  });
+
+  it("decidedBy names the single firing hook when exactly one fired", () => {
+    const caseData = makeCase();
+    const hook = makeHook();
+    const observation = makeObservation({ fired: [makeFired({ hook })] });
+
+    const result = expectPass(assertCase(caseData, observation));
+
+    expect(result.decidedBy?.hook).toBe(hook);
   });
 });
 
@@ -307,8 +455,9 @@ describe("assertCase: unresolved decisions", () => {
       detected: "9.9.9",
       specRange: ">=2.1.251 <2.2.0",
     };
+    const decision: Decision = { kind: "unknown", reasons: [reason] };
     const observation = makeObservation({
-      decision: { kind: "unknown", reasons: [reason] },
+      fired: [makeFired({ decision })],
     });
 
     const result = expectUnknown(assertCase(caseData, observation));
@@ -325,13 +474,32 @@ describe("assertCase: unresolved decisions", () => {
       kind: "plugin-hooks-present",
       files: ["/etc/plugin.json"],
     };
+    const decision: Decision = { kind: "unknown", reasons: [reason] };
     const observation = makeObservation({
-      decision: { kind: "unknown", reasons: [reason] },
+      fired: [makeFired({ decision })],
     });
 
     const result = assertCase(caseData, observation);
 
     expect(result.kind).toBe("unknown");
+  });
+
+  it("a deny from one hook outranks an unknown from another, even when the unknown hook fired first", () => {
+    const caseData = makeCase({ expect: makeExpect({ decision: "pass" }) });
+    const reason: UnknownReason = {
+      kind: "plugin-hooks-present",
+      files: ["/etc/plugin.json"],
+    };
+    const observation = makeObservation({
+      fired: [
+        makeFired({ decision: { kind: "unknown", reasons: [reason] } }),
+        makeFired({ decision: { kind: "deny", source: "exit-code", exitCode: 2 } }),
+      ],
+    });
+
+    const result = expectFail(assertCase(caseData, observation));
+
+    expect(result.decidedBy?.decision.kind).toBe("deny");
   });
 });
 
@@ -386,14 +554,27 @@ const syntheticOrigin: PayloadOrigin = { kind: "synthetic" };
 describe("summarize", () => {
   it("folds pass+fail into asserted, counts recorded-origin passes/fails into fromRecorded, and counts unknown/skipped separately", () => {
     const results: CaseResult[] = [
-      { kind: "pass", origin: syntheticOrigin },
-      { kind: "pass", origin: recordedOrigin },
-      { kind: "fail", origin: recordedOrigin, diffs: [], nonFiring: undefined },
-      { kind: "fail", origin: syntheticOrigin, diffs: [], nonFiring: undefined },
+      { kind: "pass", origin: syntheticOrigin, decidedBy: undefined },
+      { kind: "pass", origin: recordedOrigin, decidedBy: undefined },
+      {
+        kind: "fail",
+        origin: recordedOrigin,
+        diffs: [],
+        nonFiring: undefined,
+        decidedBy: undefined,
+      },
+      {
+        kind: "fail",
+        origin: syntheticOrigin,
+        diffs: [],
+        nonFiring: undefined,
+        decidedBy: undefined,
+      },
       {
         kind: "unknown",
         origin: syntheticOrigin,
         reasons: [{ kind: "plugin-hooks-present", files: [] }],
+        decidedBy: undefined,
       },
       { kind: "skipped", origin: syntheticOrigin, reason: "dry-run" },
       { kind: "skipped", origin: recordedOrigin, reason: "stub-only" },
@@ -422,13 +603,20 @@ describe("summarize", () => {
 
   it("never double-counts a case across two Summary fields", () => {
     const results: CaseResult[] = [
-      { kind: "pass", origin: syntheticOrigin },
-      { kind: "pass", origin: recordedOrigin },
-      { kind: "fail", origin: syntheticOrigin, diffs: [], nonFiring: undefined },
+      { kind: "pass", origin: syntheticOrigin, decidedBy: undefined },
+      { kind: "pass", origin: recordedOrigin, decidedBy: undefined },
+      {
+        kind: "fail",
+        origin: syntheticOrigin,
+        diffs: [],
+        nonFiring: undefined,
+        decidedBy: undefined,
+      },
       {
         kind: "unknown",
         origin: syntheticOrigin,
         reasons: [{ kind: "plugin-hooks-present", files: [] }],
+        decidedBy: undefined,
       },
       { kind: "skipped", origin: syntheticOrigin, reason: "dry-run" },
     ];

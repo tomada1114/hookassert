@@ -13,6 +13,7 @@ import {
   isStubOnly,
   summarize,
   type CaseObservation,
+  type FiredHook,
 } from "./internal/assert/index.js";
 import { resolveDecision } from "./internal/decision/index.js";
 import {
@@ -1019,24 +1020,24 @@ function resolveTestExitCode(
   return 0;
 }
 
-/** One fixture case, prepared for execution: its matcher result and (once assigned) its authoritative step. */
+/** One fixture case, prepared for execution: its matcher result and every step it spawns. */
 interface PreparedCase {
   readonly fixturePath: string;
   readonly index: number;
   readonly caseData: FixtureCase;
   /**
-   * The step whose outcome this case's `Decision` is built from — the first
-   * hook the matcher resolved as firing, in `ResolvedHook` order — or
-   * `undefined` when the case was pre-skipped or nothing fired for it.
+   * Every step this case spawns — one per hook the matcher resolved as
+   * firing, in `ResolvedHook` order. Empty when the case was pre-skipped or
+   * nothing fired for it.
    *
    * @remarks
-   * When more than one hook fires for the same case, every one of them is
-   * still spawned (a real Claude Code session would run them all), but only
-   * this first one is read back for the case's own pass/fail/unknown
-   * verdict — `CaseObservation` carries a single `decision`, not one per
-   * firing hook.
+   * Every firing hook is still spawned (a real Claude Code session would
+   * run them all), and every one of their outcomes is read back into this
+   * case's `CaseObservation.fired` — `assertCase` folds them into one
+   * verdict itself, through `combineDecisions`, rather than this module
+   * picking a single "authoritative" step ahead of time.
    */
-  readonly firstStep: ExecutionStep | undefined;
+  readonly steps: readonly ExecutionStep[];
   readonly rejectedByMatcher: readonly MatcherOutcome[];
   readonly excludedHooks: readonly ResolvedHook[];
 }
@@ -1175,9 +1176,9 @@ async function runTest(args: readonly string[], deps: CliDeps): Promise<CliResul
           ? { ...rawCaseData, dryRun: true }
           : rawCaseData;
 
-      let firstStep: ExecutionStep | undefined;
+      const steps: ExecutionStep[] = [];
       if (!isPreSkipped(caseData)) {
-        match.firing.forEach((hook, hookIndex) => {
+        for (const hook of match.firing) {
           const step: ExecutionStep = {
             event: caseData.event,
             hook,
@@ -1186,17 +1187,15 @@ async function runTest(args: readonly string[], deps: CliDeps): Promise<CliResul
             stub: caseData.stub?.[hook.command],
           };
           filePlan.steps.push(step);
-          if (hookIndex === 0) {
-            firstStep = step;
-          }
-        });
+          steps.push(step);
+        }
       }
 
       prepared.push({
         fixturePath,
         index,
         caseData,
-        firstStep,
+        steps,
         rejectedByMatcher: match.rejected,
         excludedHooks,
       });
@@ -1239,15 +1238,23 @@ async function runTest(args: readonly string[], deps: CliDeps): Promise<CliResul
   const caseReports: TestCaseReport[] = [];
   const caseResults: CaseResult[] = [];
   for (const p of prepared) {
-    const outcome =
-      p.firstStep === undefined ? undefined : outcomesByStep.get(p.firstStep);
-    const decision =
-      outcome === undefined
-        ? undefined
-        : resolveDecision(spec, p.caseData.event, outcome);
+    // Every firing step's outcome is folded in, in firing order — assertCase
+    // (via combineDecisions) is what picks the case's single verdict from
+    // among them, not this loop.
+    const fired: FiredHook[] = [];
+    for (const step of p.steps) {
+      const outcome = outcomesByStep.get(step);
+      if (outcome === undefined) {
+        continue;
+      }
+      fired.push({
+        hook: step.hook,
+        execOutcome: outcome,
+        decision: resolveDecision(spec, p.caseData.event, outcome),
+      });
+    }
     const observation: CaseObservation = {
-      decision,
-      execOutcome: outcome,
+      fired,
       rejectedByMatcher: p.rejectedByMatcher,
       excludedHooks: p.excludedHooks,
     };
@@ -1259,6 +1266,7 @@ async function runTest(args: readonly string[], deps: CliDeps): Promise<CliResul
       event: p.caseData.event,
       tool: p.caseData.tool,
       result,
+      firedCount: fired.length,
     });
   }
 

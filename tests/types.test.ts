@@ -3,6 +3,7 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 import type {
   CaseResult,
   Decision,
+  DecidingHook,
   EventName,
   ExecOutcome,
   ExpectationDiff,
@@ -460,6 +461,18 @@ const hook: ResolvedHook = {
   dedupeKey: "PreToolUse::./hook.sh",
 };
 
+/** A complete `DecidingHook`, reused by the `CaseResult` cases below. */
+const decidingHook: DecidingHook = { hook, decision: { kind: "pass", exitCode: 0 } };
+
+describe("DecidingHook", () => {
+  it("carries the deciding hook and the Decision it produced", () => {
+    expectTypeOf(decidingHook).toEqualTypeOf<{
+      readonly hook: ResolvedHook;
+      readonly decision: Decision;
+    }>();
+  });
+});
+
 describe("CaseResult", () => {
   it("narrows on kind to each variant's own fields", () => {
     const narrow = (result: CaseResult): void => {
@@ -468,6 +481,7 @@ describe("CaseResult", () => {
           expectTypeOf(result).toEqualTypeOf<{
             readonly kind: "pass";
             readonly origin: PayloadOrigin;
+            readonly decidedBy: DecidingHook | undefined;
           }>();
           break;
         }
@@ -477,6 +491,7 @@ describe("CaseResult", () => {
             readonly origin: PayloadOrigin;
             readonly diffs: readonly ExpectationDiff[];
             readonly nonFiring: NonFiringExplanation | undefined;
+            readonly decidedBy: DecidingHook | undefined;
           }>();
           break;
         }
@@ -485,6 +500,7 @@ describe("CaseResult", () => {
             readonly kind: "unknown";
             readonly origin: PayloadOrigin;
             readonly reasons: readonly [UnknownReason, ...UnknownReason[]];
+            readonly decidedBy: DecidingHook | undefined;
           }>();
           break;
         }
@@ -498,23 +514,26 @@ describe("CaseResult", () => {
         }
       }
     };
-    narrow({ kind: "pass", origin: { kind: "synthetic" } });
+    narrow({ kind: "pass", origin: { kind: "synthetic" }, decidedBy: undefined });
     narrow({
       kind: "fail",
       origin: { kind: "synthetic" },
       diffs: [{ field: "exitCode", expectedExitCode: 2, actualExitCode: 0 }],
       nonFiring: undefined,
+      decidedBy: decidingHook,
     });
     narrow({
       kind: "fail",
       origin: { kind: "synthetic" },
       diffs: [],
       nonFiring: { kind: "no-hook-configured", event: "PreToolUse" },
+      decidedBy: undefined,
     });
     narrow({
       kind: "unknown",
       origin: { kind: "synthetic" },
       reasons: [{ kind: "plugin-hooks-present", files: [] }],
+      decidedBy: decidingHook,
     });
     narrow({ kind: "skipped", origin: { kind: "synthetic" }, reason: "dry-run" });
   });
@@ -526,6 +545,7 @@ describe("CaseResult", () => {
         origin: { kind: "synthetic" },
         // @ts-expect-error reasons is a non-empty tuple, not a plain array — an empty array cannot construct it
         reasons: [],
+        decidedBy: undefined,
       };
       void result;
     };
@@ -538,6 +558,7 @@ describe("CaseResult", () => {
       kind: "unknown",
       origin: { kind: "synthetic" },
       reasons: [reason],
+      decidedBy: undefined,
     };
     expectTypeOf(result.reasons).toEqualTypeOf<
       readonly [UnknownReason, ...UnknownReason[]]
@@ -551,10 +572,35 @@ describe("CaseResult", () => {
         kind: "fail",
         origin: { kind: "synthetic" },
         diffs: [],
+        decidedBy: undefined,
       };
       void result;
     };
     expect(rejected).toBeTypeOf("function");
+  });
+
+  it("rejects a pass variant missing decidedBy", () => {
+    const rejected = (): void => {
+      // @ts-expect-error decidedBy must be present, even as undefined, per exactOptionalPropertyTypes
+      const result: CaseResult = { kind: "pass", origin: { kind: "synthetic" } };
+      void result;
+    };
+    expect(rejected).toBeTypeOf("function");
+  });
+
+  it("accepts decidedBy as either a DecidingHook or undefined", () => {
+    const withHook: CaseResult = {
+      kind: "pass",
+      origin: { kind: "synthetic" },
+      decidedBy: decidingHook,
+    };
+    const withoutHook: CaseResult = {
+      kind: "pass",
+      origin: { kind: "synthetic" },
+      decidedBy: undefined,
+    };
+    expectTypeOf(withHook.decidedBy).toEqualTypeOf<DecidingHook | undefined>();
+    expectTypeOf(withoutHook.decidedBy).toEqualTypeOf<DecidingHook | undefined>();
   });
 });
 
