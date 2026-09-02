@@ -153,19 +153,19 @@ function describeLaunchFailure(
 /**
  * ` — decided by …` suffix for a `FAIL`/`UNKNOWN` line, shown only when more
  * than one hook fired for the case — naming the hook for a single-hook case
- * would just repeat what the line already says. Never shown when the
- * deciding hook's own `launchError` is set: {@link describeLaunchFailure}
- * already names the hook and its location.
+ * would just repeat what the line already says. `detailNamesHook` suppresses
+ * it for the one line whose detail has already named the hook itself, a
+ * `FAIL` rendered by {@link describeLaunchFailure}; an `UNKNOWN` line never
+ * carries that message — a launch failure whose event is missing from the
+ * spec resolves to `unknown` before `launchError` is ever read — so it keeps
+ * the suffix regardless of the deciding hook's `launchError`.
  */
 function decidedBySuffix(
   report: TestCaseReport,
   decidedBy: DecidingHook | undefined,
+  detailNamesHook: boolean,
 ): string {
-  if (
-    decidedBy === undefined ||
-    report.firedCount <= 1 ||
-    decidedBy.launchError !== undefined
-  ) {
+  if (decidedBy === undefined || report.firedCount <= 1 || detailNamesHook) {
     return "";
   }
   return ` — decided by ${describeDecidedBy(decidedBy)}`;
@@ -197,11 +197,14 @@ function renderCaseLine(report: TestCaseReport): string {
       return `SKIP  ${label} (${result.reason})`;
     case "unknown": {
       const reasons = result.reasons.map(describeUnknownReason).join("; ");
-      return `UNKNOWN ${label} — ${reasons}${decidedBySuffix(report, result.decidedBy)}`;
+      return `UNKNOWN ${label} — ${reasons}${decidedBySuffix(report, result.decidedBy, false)}`;
     }
     case "fail": {
       const detail = describeFailDetail(result);
-      return `FAIL  ${label} — ${detail}${decidedBySuffix(report, result.decidedBy)}`;
+      // The launch-failure detail already names the hook and its declaration
+      // site, so the suffix would only repeat it.
+      const detailNamesHook = result.decidedBy?.launchError !== undefined;
+      return `FAIL  ${label} — ${detail}${decidedBySuffix(report, result.decidedBy, detailNamesHook)}`;
     }
   }
 }
