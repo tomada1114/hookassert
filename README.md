@@ -206,7 +206,9 @@ Each entry in `cases` may declare:
   against `hookSpecificOutput.additionalContext`; `updatedInput` compares the same way
   against `hookSpecificOutput.updatedInput`. Either is satisfied by any one firing
   hook's own value, and a mismatch (including no firing hook emitting the key at all)
-  fails.
+  fails. When _no_ hook fires at all, nothing is compared: the case passes unless it
+  declared `fires: true`, so pair a `context`/`updatedInput` expectation with
+  `fires: true` to keep a case that stopped firing from staying green.
 - `stub` — map an exact hook `command` string to a canned `{ exitCode }` instead of
   actually spawning it.
 - `dryRun: true` — skip execution for this one case, the same effect `--dry-run` has for

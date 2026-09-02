@@ -272,9 +272,9 @@ function isNonEmptyFired(
  * 5. The combined `Decision` resolved with confidence → every declared
  *    `expect` field is compared against what was observed (`decision`/
  *    `exitCode` against the combined verdict, `stdoutContains`/
- *    `stderrContains`/`timedOut` against every firing hook's own stream);
- *    any mismatch produces `"fail"` with a non-empty `diffs`, otherwise
- *    `"pass"`.
+ *    `stderrContains`/`timedOut`/`context`/`updatedInput` against every
+ *    firing hook's own stream); any mismatch produces `"fail"` with a
+ *    non-empty `diffs`, otherwise `"pass"`.
  */
 export function assertCase(
   caseData: FixtureCase,
