@@ -146,18 +146,29 @@ export interface ResolvedHook {
 }
 
 /**
- * A hook's raw exit code, stdout, stderr, and whether it timed out.
+ * A hook's raw exit code, stdout, stderr, whether it timed out, and whether
+ * it ever launched at all.
  *
  * @remarks
  * The input the static decision resolver (`src/internal/decision/`) and the
- * future executor's `Spawner` seam both speak: whatever actually spawns a
- * hook produces one of these, and the decision resolver consumes it without
- * ever spawning anything itself.
+ * executor's `Spawner` seam both speak: whatever actually spawns a hook
+ * produces one of these, and the decision resolver consumes it without ever
+ * spawning anything itself.
  *
  * @public
  */
 export interface ExecOutcome {
-  /** The process's exit status. */
+  /**
+   * The process's exit status, or `-1` for "no exit status" — which of three
+   * situations that is is told apart by {@link ExecOutcome.timedOut} and
+   * {@link ExecOutcome.launchError}, not by a fourth exit-code value:
+   *
+   * - Killed by hookassert's own timeout: `timedOut: true`.
+   * - Killed by a signal (and not a timeout): `timedOut: false`,
+   *   `launchError: undefined`.
+   * - Never started at all (a typo'd command, a missing interpreter):
+   *   `timedOut: false`, `launchError` set to the OS-reported reason.
+   */
   readonly exitCode: number;
 
   /** Everything the hook wrote to stdout. */
@@ -168,6 +179,21 @@ export interface ExecOutcome {
 
   /** Whether the hook was killed for exceeding its deadline. */
   readonly timedOut: boolean;
+
+  /**
+   * The OS-reported reason the process could not be launched at all (for
+   * example `spawn python33 ENOENT`, or `EACCES`), or `undefined` for every
+   * process that actually started.
+   *
+   * @remarks
+   * Set only when the child process's `"error"` event fired before a
+   * `"close"` carrying a real exit status — see {@link ExecOutcome.exitCode}'s
+   * own remark for how this, together with `timedOut`, disambiguates every
+   * `-1` outcome. Carrying the OS message here, rather than folding it into
+   * `stderr`, means a consumer never has to fish a launch failure out of a
+   * stream that a hook's own output also writes to.
+   */
+  readonly launchError: string | undefined;
 }
 
 /**
@@ -335,8 +361,16 @@ export type Decision =
        * `"invalid-json"` — stdout looked like JSON and failed to parse.
        * `"schema-violation"` — stdout parsed but its decision value is not
        * one the event documents.
+       * `"launch-failed"` — the process never started at all (see
+       * {@link ExecOutcome.launchError}); a case-level error, not a run-level
+       * load error, since it is only discoverable after consent and after
+       * spawning.
        */
-      readonly cause: "nonzero-exit-without-json" | "invalid-json" | "schema-violation";
+      readonly cause:
+        | "nonzero-exit-without-json"
+        | "invalid-json"
+        | "schema-violation"
+        | "launch-failed";
     }
   | {
       /**
@@ -484,6 +518,15 @@ export interface DecidingHook {
   readonly hook: ResolvedHook;
   /** The case's combined `Decision` — this hook's own, since it is the one that decided. */
   readonly decision: Decision;
+  /**
+   * The deciding hook's own {@link ExecOutcome.launchError}, or `undefined`
+   * when it actually launched.
+   *
+   * @remarks
+   * Carried here so a reporter can print a launch failure's OS-reported
+   * reason without holding the whole `ExecOutcome` alongside a `CaseResult`.
+   */
+  readonly launchError: string | undefined;
 }
 
 /**

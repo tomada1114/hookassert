@@ -38,7 +38,13 @@ class CountingSpawner implements Spawner {
   readonly #outcome: ExecOutcome;
 
   constructor(
-    outcome: ExecOutcome = { exitCode: 0, stdout: "", stderr: "", timedOut: false },
+    outcome: ExecOutcome = {
+      exitCode: 0,
+      stdout: "",
+      stderr: "",
+      timedOut: false,
+      launchError: undefined,
+    },
   ) {
     this.#outcome = outcome;
   }
@@ -454,6 +460,7 @@ describe("stub bypass", () => {
       stdout: "",
       stderr: "",
       timedOut: false,
+      launchError: undefined,
     });
     // The regression this test guards: the stubbed command's own name must
     // never show up among what was actually spawned.
@@ -484,7 +491,13 @@ describe("concurrency cap", () => {
       return new Promise((resolve) => {
         this.#pending.push(() => {
           this.#current -= 1;
-          resolve({ exitCode: 0, stdout: "", stderr: "", timedOut: false });
+          resolve({
+            exitCode: 0,
+            stdout: "",
+            stderr: "",
+            timedOut: false,
+            launchError: undefined,
+          });
         });
       });
     }
@@ -612,6 +625,7 @@ describe("concurrency cap", () => {
       stdout: "",
       stderr: "",
       timedOut: false,
+      launchError: undefined,
     });
   });
 });
@@ -675,5 +689,32 @@ describe("Spawner never rejects", () => {
     expect(result).toBeDefined();
     expect(result?.outcome.timedOut).toBe(false);
     expect(result?.outcome.exitCode).not.toBe(0);
+  });
+});
+
+describe("launchError (issue #39)", () => {
+  it("exec form: a nonexistent command sets launchError to the OS message and never appends it to stderr", async () => {
+    const hook = makeHook({ command: "/no/such/hookassert-fixture-binary", args: [] });
+    const deps = makeDeps({ spawner: new NodeSpawner() });
+    const [result] = await executeHooks(deps, makePlan([makeStep(hook)]));
+
+    expect(result?.outcome.launchError).toMatch(/ENOENT/);
+    expect(result?.outcome.stderr).toBe("");
+    expect(result?.outcome.timedOut).toBe(false);
+  });
+
+  it("shell form: a nonexistent script exits 127 via the shell itself, with launchError left undefined", async () => {
+    // No `args`: shell form. `/bin/sh` itself launches fine and reports the
+    // missing script the same way Claude Code's own shell form would.
+    const hook = makeHook({
+      command: "/no/such/hookassert-fixture-script.sh",
+      args: undefined,
+    });
+    const deps = makeDeps({ spawner: new NodeSpawner() });
+    const [result] = await executeHooks(deps, makePlan([makeStep(hook)]));
+
+    expect(result?.outcome.exitCode).toBe(127);
+    expect(result?.outcome.launchError).toBeUndefined();
+    expect(result?.outcome.timedOut).toBe(false);
   });
 });

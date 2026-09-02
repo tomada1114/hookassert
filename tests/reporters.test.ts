@@ -677,6 +677,7 @@ interface ScriptedOutcome {
   readonly stdout?: string;
   readonly stderr?: string;
   readonly timedOut?: boolean;
+  readonly launchError?: string;
 }
 
 /**
@@ -700,6 +701,7 @@ class ScriptedSpawner implements Spawner {
       stdout: outcome.stdout ?? "",
       stderr: outcome.stderr ?? "",
       timedOut: outcome.timedOut ?? false,
+      launchError: outcome.launchError,
     });
   }
 }
@@ -714,11 +716,15 @@ interface JsonNonFiringExplanationShape {
 interface JsonUnknownReasonShape {
   readonly kind: string;
 }
+interface JsonDecidingHookShape {
+  readonly launchError: string | null;
+}
 interface JsonCaseResultShape {
   readonly kind: string;
   readonly diffs?: readonly JsonExpectationDiffShape[];
   readonly nonFiring?: JsonNonFiringExplanationShape | null;
   readonly reasons?: readonly JsonUnknownReasonShape[];
+  readonly decidedBy?: JsonDecidingHookShape | null;
 }
 interface JsonTestCaseShape {
   readonly event: string;
@@ -749,6 +755,7 @@ describe("renderTestJson: schema validation against a real rendering", () => {
   const CMD_WEBFETCH_TIMEOUT = "cmd-webfetch-timeout";
   const CMD_NOTIFICATION_NOOP = "cmd-notification-noop";
   const CMD_STOP_LOCAL_ONLY = "cmd-stop-local-only";
+  const CMD_LAUNCH_FAIL = "cmd-launch-fail";
 
   beforeAll(() => {
     projectDir = mkdtempSync(path.join(tmpdir(), "hookassert-reporters-test-schema-"));
@@ -766,6 +773,11 @@ describe("renderTestJson: schema validation against a real rendering", () => {
           commandGroup("Grep", CMD_GREP_STDOUT),
           commandGroup("Glob", CMD_GLOB_STDERR),
           commandGroup("WebFetch", CMD_WEBFETCH_TIMEOUT),
+          // Exec form (`args` present) — issue #39's launch-failure scenario.
+          {
+            matcher: "LaunchFail",
+            hooks: [{ type: "command", command: CMD_LAUNCH_FAIL, args: [] }],
+          },
         ],
         Notification: [commandGroup(undefined, CMD_NOTIFICATION_NOOP)],
       },
@@ -840,6 +852,10 @@ describe("renderTestJson: schema validation against a real rendering", () => {
         // "unknown" via an UnknownReason.kind: "event-not-in-spec" —
         // Notification has no entry in valid-minimal.json's spec.
         { event: "Notification", expect: {} },
+        // "pass" via Decision.error.cause: "launch-failed" (issue #39) — a
+        // fixture that expects the launch failure exactly still passes, and
+        // decidedBy.launchError carries the OS-reported reason.
+        { event: "PreToolUse", tool: "LaunchFail", expect: { decision: "error" } },
         // "skipped", reason "dry-run".
         {
           event: "PreToolUse",
@@ -868,6 +884,10 @@ describe("renderTestJson: schema validation against a real rendering", () => {
         [CMD_GLOB_STDERR, { exitCode: 0, stderr: "actual-stderr" }],
         [CMD_WEBFETCH_TIMEOUT, { exitCode: -1, timedOut: true }],
         [CMD_NOTIFICATION_NOOP, { exitCode: 0 }],
+        [
+          CMD_LAUNCH_FAIL,
+          { exitCode: -1, launchError: "spawn cmd-launch-fail ENOENT" },
+        ],
       ]),
     );
 
@@ -883,7 +903,7 @@ describe("renderTestJson: schema validation against a real rendering", () => {
       },
     );
 
-    // 9 of the 13 cases fail — `resolveTestExitCode` returns 1 whenever
+    // 9 of the 14 cases fail — `resolveTestExitCode` returns 1 whenever
     // `summary.failed > 0`, regardless of `--ci`.
     expect(result.exitCode).toBe(1);
     const parsed: unknown = JSON.parse(result.stdout);
@@ -935,6 +955,17 @@ describe("renderTestJson: schema validation against a real rendering", () => {
       (c) => c.event === "PreToolUse" && c.tool === "Write",
     );
     expect(decisionDiffCase?.result.nonFiring).toBeNull();
+
+    // Issue #39: a launch failure resolves to a "pass" CaseResult when the
+    // fixture expects decision: "error", and decidedBy.launchError carries
+    // the OS-reported reason through to the JSON report.
+    const launchFailedCase = report.cases.find(
+      (c) => c.event === "PreToolUse" && c.tool === "LaunchFail",
+    );
+    expect(launchFailedCase?.result.kind).toBe("pass");
+    expect(launchFailedCase?.result.decidedBy?.launchError).toBe(
+      "spawn cmd-launch-fail ENOENT",
+    );
   });
 });
 

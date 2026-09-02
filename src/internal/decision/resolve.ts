@@ -6,7 +6,12 @@
  * already obtained (a later executor issue's `Spawner`, or a test's stub),
  * and `resolveDecision` never spawns anything itself.
  *
- * Every branch reads `spec.events[event]`'s own data (`blockable`,
+ * `outcome.launchError !== undefined` is checked before anything else below
+ * it: a process that never started carries no meaningful exit code or
+ * timeout at all, and reads a field rather than a literal — no exit-code
+ * value is reserved for "never launched."
+ *
+ * Every other branch reads `spec.events[event]`'s own data (`blockable`,
  * `jsonDecisions`, `exitCodeEffects`) rather than hard-coding exit-code
  * literals: the shipped spec documents at least one event (`WorktreeCreate`)
  * whose non-`2` exit code also blocks, so "exit 2 means deny" is only true
@@ -175,6 +180,13 @@ function findExitCodeEffect(
  * deny that will not really happen in production is exactly the
  * over-cautious failure mode this project exists to avoid alongside the
  * under-cautious one.
+ *
+ * `outcome.launchError !== undefined` is checked before the timeout check
+ * and before any `exitCodeEffects` lookup — a process that never launched
+ * cannot have timed out or exited with a meaningful code, so nothing below
+ * that check is reachable for it. A launch failure is a case-level `error`
+ * decision, not a run-level load error: it is only discoverable after
+ * consent and after spawning was attempted.
  */
 export function resolveDecision(
   spec: Spec,
@@ -194,6 +206,10 @@ export function resolveDecision(
       event,
       specVersion: spec.specVersion,
     });
+  }
+
+  if (outcome.launchError !== undefined) {
+    return errored(outcome.exitCode, "launch-failed");
   }
 
   if (outcome.timedOut) {

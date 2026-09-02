@@ -156,7 +156,13 @@ export class NodeSpawner implements Spawner {
       const timer = setTimeout(() => {
         timedOut = true;
         killProcessGroup(child);
-        settle({ exitCode: -1, stdout, stderr, timedOut: true });
+        settle({
+          exitCode: -1,
+          stdout,
+          stderr,
+          timedOut: true,
+          launchError: undefined,
+        });
       }, req.timeoutMs);
 
       // `setEncoding` decodes the stream itself rather than each chunk
@@ -176,17 +182,27 @@ export class NodeSpawner implements Spawner {
       // A process killed for a timeout, or one that never starts at all
       // (`ENOENT` on the command itself), reports through "error"/"close"
       // rather than throwing: `Spawner.spawn` promises to always resolve
-      // with an `ExecOutcome`, never to reject.
+      // with an `ExecOutcome`, never to reject. A launch failure carries its
+      // OS-reported message in `launchError` rather than folded into
+      // `stderr` — see `ExecOutcome.launchError`'s own remark in
+      // `src/types.ts` for why the two channels are kept separate.
       child.on("error", (error) => {
         settle({
           exitCode: -1,
           stdout,
-          stderr: stderr + (stderr.length > 0 ? "\n" : "") + error.message,
+          stderr,
           timedOut,
+          launchError: error.message,
         });
       });
       child.on("close", (code) => {
-        settle({ exitCode: code ?? -1, stdout, stderr, timedOut });
+        settle({
+          exitCode: code ?? -1,
+          stdout,
+          stderr,
+          timedOut,
+          launchError: undefined,
+        });
       });
 
       // A hook that exits before consuming its full stdin would otherwise

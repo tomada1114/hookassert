@@ -47,6 +47,7 @@ interface FakeOutcome {
   readonly exitCode: number;
   readonly stdout?: string;
   readonly stderr?: string;
+  readonly launchError?: string;
 }
 
 /**
@@ -85,6 +86,7 @@ class FakeSpawner implements Spawner {
       stdout: outcome.stdout ?? "",
       stderr: outcome.stderr ?? "",
       timedOut: false,
+      launchError: outcome.launchError,
     });
   }
 }
@@ -275,6 +277,116 @@ describe("the full pipeline", () => {
   });
 });
 
+describe("launch failures (issue #39)", () => {
+  // A dedicated project dir, isolated from the shared `projectDir`'s own
+  // settings.json: this hook's command deliberately does not exist, and the
+  // shared settings file is reused by `lint`-touching tests elsewhere in
+  // this suite that assert zero findings — a nonexistent command would
+  // trip `lint`'s own command-not-found rule there.
+  let launchFailProjectDir: string;
+
+  afterEach(() => {
+    rmSync(launchFailProjectDir, { recursive: true, force: true });
+  });
+
+  function setUpLaunchFailProject(): void {
+    launchFailProjectDir = mkdtempSync(
+      path.join(tmpdir(), "hookassert-launch-fail-project-"),
+    );
+    mkdirSync(path.join(launchFailProjectDir, ".claude"), { recursive: true });
+    const settings = {
+      hooks: {
+        PreToolUse: [
+          // Exec form (`args` present) naming a command that does not
+          // exist — the literal command name mirrors this issue's own
+          // illustrative example.
+          {
+            matcher: "LaunchFail",
+            hooks: [{ type: "command", command: "python33", args: [] }],
+          },
+        ],
+      },
+    };
+    writeFileSync(
+      path.join(launchFailProjectDir, ".claude", "settings.json"),
+      JSON.stringify(settings, null, 2),
+    );
+  }
+
+  function launchFailFixturePath(fixture: unknown): string {
+    const filePath = path.join(launchFailProjectDir, "fixture.yaml");
+    writeFileSync(filePath, JSON.stringify(fixture, null, 2));
+    return filePath;
+  }
+
+  it("a fixture expecting decision: error passes when the hook never launches", async () => {
+    setUpLaunchFailProject();
+    const spawner = new RecordingSpawner();
+    const fixturePath = launchFailFixturePath({
+      cases: [
+        { event: "PreToolUse", tool: "LaunchFail", expect: { decision: "error" } },
+      ],
+    });
+
+    const result = await runCli(
+      ["test", fixturePath, "--claude-version", "2.1.300", "--yes", "--format", "json"],
+      "hookassert",
+      testDeps({ cwd: launchFailProjectDir, spawner }),
+    );
+
+    expect(result.exitCode).toBe(0);
+    const report = parseJsonReport(result.stdout);
+    expect(report.summary).toEqual({
+      asserted: 1,
+      fromRecorded: 0,
+      failed: 0,
+      unknown: 0,
+      skipped: 0,
+    });
+    expect(report.cases[0]?.result.kind).toBe("pass");
+  });
+
+  it("pretty prints the launch-failure message and github annotates the hook's own declaration line", async () => {
+    setUpLaunchFailProject();
+    // Expects something a launch failure cannot satisfy, so the case fails
+    // and the launch message — not the raw exitCode/decision diff — is what
+    // both reporters show.
+    const fixturePath = launchFailFixturePath({
+      cases: [{ event: "PreToolUse", tool: "LaunchFail", expect: { exitCode: 0 } }],
+    });
+
+    const pretty = await runCli(
+      ["test", fixturePath, "--claude-version", "2.1.300", "--yes"],
+      "hookassert",
+      testDeps({ cwd: launchFailProjectDir, spawner: new RecordingSpawner() }),
+    );
+    expect(pretty.stdout).toContain("FAIL");
+    expect(pretty.stdout).toContain("hook never launched: spawn python33 ENOENT");
+    expect(pretty.stdout).toContain('command "python33"');
+    expect(pretty.stdout).toMatch(/settings\.json:\d+\)/);
+    // The launch message already names the hook and its location, so the
+    // "decided by" suffix (only relevant for multi-hook cases anyway) never
+    // doubles up on it.
+    expect(pretty.stdout).not.toContain("decided by");
+
+    const github = await runCli(
+      [
+        "test",
+        fixturePath,
+        "--claude-version",
+        "2.1.300",
+        "--yes",
+        "--format",
+        "github",
+      ],
+      "hookassert",
+      testDeps({ cwd: launchFailProjectDir, spawner: new RecordingSpawner() }),
+    );
+    expect(github.stdout).toMatch(/::error file=\.claude\/settings\.json,line=\d+/);
+    expect(github.stdout).toContain("hook never launched: spawn python33 ENOENT");
+  });
+});
+
 describe("combining more than one firing hook (issue #42)", () => {
   // A dedicated project/home pair per test, isolated from the shared
   // projectDir's own settings.json: two hooks (one per settings layer) fire
@@ -412,7 +524,13 @@ describe("combining more than one firing hook (issue #42)", () => {
       spawn(req: SpawnRequest): Promise<ExecOutcome> {
         this.calls.push(req);
         const timedOut = this.calls.length > 1;
-        return Promise.resolve({ exitCode: 0, stdout: "", stderr: "", timedOut });
+        return Promise.resolve({
+          exitCode: 0,
+          stdout: "",
+          stderr: "",
+          timedOut,
+          launchError: undefined,
+        });
       }
     }
     const spawner = new TimeoutOnSecondSpawner();
@@ -958,7 +1076,13 @@ describe("cross-file concurrency cap (issue #40)", () => {
       return new Promise((resolve) => {
         this.#pending.push(() => {
           this.#current -= 1;
-          resolve({ exitCode: 0, stdout: "", stderr: "", timedOut: false });
+          resolve({
+            exitCode: 0,
+            stdout: "",
+            stderr: "",
+            timedOut: false,
+            launchError: undefined,
+          });
         });
       });
     }
