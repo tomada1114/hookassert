@@ -560,7 +560,17 @@ describe("matcherTargets.kind: none", () => {
 });
 
 describe("findCatastrophicConstruct: screening nested unbounded quantifiers", () => {
-  const POSITIVES: readonly string[] = ["(a+)+$", "(a*)*b", "((ab)*)*", "(x+x+)+y"];
+  const POSITIVES: readonly string[] = [
+    "(a+)+$",
+    "(a*)*b",
+    "((ab)*)*",
+    "(x+x+)+y",
+    // A nested unbounded quantifier sitting one quantifier-less wrapper
+    // group deeper — see issue #28's F1 finding.
+    "((a+))+",
+    // Same, but the wrapper carries its own bounded quantifier.
+    "((a+)?)+",
+  ];
 
   it.each(POSITIVES)("flags %s as a nested unbounded quantifier", (pattern) => {
     const construct = findCatastrophicConstruct(pattern);
@@ -621,6 +631,64 @@ describe("a catastrophic matcher: screened rather than compiled and run", () => 
     expect(result.rejected[0]?.kind).toBe("unknown");
     expect(result.rejected[0]?.reason).toBe(
       'this matcher cannot be evaluated safely: nested unbounded quantifier at offset 0: "(a+)+"; rewrite it without a nested quantifier',
+    );
+  });
+
+  it("never even constructs a RegExp from the catastrophic pattern — proof it is screened, not merely discarded after a fast failure", () => {
+    const OriginalRegExp = globalThis.RegExp;
+    const constructedWith: unknown[] = [];
+
+    class SpyRegExp extends OriginalRegExp {
+      constructor(pattern?: string | RegExp, flags?: string) {
+        constructedWith.push(pattern);
+        super(pattern as string, flags);
+      }
+    }
+    globalThis.RegExp = SpyRegExp as unknown as RegExpConstructor;
+
+    try {
+      const hook = makeHook("PreToolUse", PATTERN);
+      const result = matchHooks(
+        REAL_SPEC,
+        IN_RANGE_VERSION,
+        requestFor("PreToolUse", hook, TARGET),
+      );
+      expect(result.rejected).toHaveLength(1);
+      expect(result.rejected[0]?.kind).toBe("unknown");
+    } finally {
+      globalThis.RegExp = OriginalRegExp;
+    }
+
+    expect(constructedWith).not.toContain(PATTERN);
+  });
+});
+
+describe("a nested unbounded quantifier behind a wrapper group: screened rather than compiled and run", () => {
+  // ((a+))+ is (a+)+ one quantifier-less wrapper group deeper — the F1
+  // regression for issue #28. Same proof shape as the `(a+)+$` block above:
+  // the screen must catch it before `new RegExp` is ever reached.
+  const PATTERN = "((a+))+$";
+  const TARGET = `${"a".repeat(40)}b`;
+
+  it("classifyMatcher classifies it as unknown, not unanchored-regex", () => {
+    expect(classifyMatcher(REAL_SPEC, IN_RANGE_VERSION, "PreToolUse", PATTERN)).toBe(
+      "unknown",
+    );
+  });
+
+  it("matchHooks rejects it as unknown, naming the construct in the reason, well within the test's own timeout", () => {
+    const hook = makeHook("PreToolUse", PATTERN);
+    const result = matchHooks(
+      REAL_SPEC,
+      IN_RANGE_VERSION,
+      requestFor("PreToolUse", hook, TARGET),
+    );
+
+    expect(result.firing).toEqual([]);
+    expect(result.rejected).toHaveLength(1);
+    expect(result.rejected[0]?.kind).toBe("unknown");
+    expect(result.rejected[0]?.reason).toBe(
+      'this matcher cannot be evaluated safely: nested unbounded quantifier at offset 0: "((a+))+"; rewrite it without a nested quantifier',
     );
   });
 

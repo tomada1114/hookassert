@@ -23,7 +23,15 @@
  * itself given an unbounded quantifier. When a group closes and is
  * *itself* immediately followed by an unbounded quantifier, that memory is
  * exactly the answer to "does this group contain an unbounded quantifier
- * inside it" — no backtracking, no automaton, one pass.
+ * inside it" — no backtracking, no automaton, one pass. That memory does
+ * not stop at the closing paren, either: whatever the closing group is (or
+ * is not) followed by, its "contains an unbounded quantifier" flag is
+ * carried into the enclosing frame, the same way a plain atom's own
+ * unbounded quantifier is. A wrapper group with no quantifier of its own
+ * (`((a+))+`) or a bounded one (`((a+)?)+`) still carries the inner
+ * unbounded repetition outward, so it is caught the moment some group
+ * further out is itself given an unbounded quantifier — no matter how many
+ * quantifier-less or boundedly-quantified wrapper groups sit in between.
  *
  * Deliberately conservative in two directions:
  *
@@ -189,23 +197,23 @@ export function findCatastrophicConstruct(pattern: string): string | undefined {
       }
 
       const quantifier = matchQuantifier(pattern, afterGroup);
-      if (quantifier === undefined) {
-        i = afterGroup;
-        continue;
-      }
 
-      if (quantifier.unbounded && frame.hasInnerUnbounded) {
+      if (quantifier !== undefined && quantifier.unbounded && frame.hasInnerUnbounded) {
         const construct = pattern.slice(frame.start, quantifier.end);
         return `nested unbounded quantifier at offset ${String(frame.start)}: ${JSON.stringify(construct)}`;
       }
 
-      if (quantifier.unbounded) {
-        const enclosing = stack[stack.length - 1];
-        if (enclosing !== undefined) {
-          enclosing.hasInnerUnbounded = true;
-        }
+      // Propagate to the enclosing frame regardless of what (if anything)
+      // follows this group — see this file's remarks on why the memory
+      // must survive a quantifier-less or boundedly-quantified wrapper.
+      const enclosing = stack[stack.length - 1];
+      if (
+        enclosing !== undefined &&
+        (frame.hasInnerUnbounded || quantifier?.unbounded === true)
+      ) {
+        enclosing.hasInnerUnbounded = true;
       }
-      i = quantifier.end;
+      i = quantifier === undefined ? afterGroup : quantifier.end;
       continue;
     }
 
