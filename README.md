@@ -201,8 +201,12 @@ Each entry in `cases` may declare:
   writing `input` by hand. A case with a recorded origin counts toward `test`'s own
   `(N from recorded)` summary count.
 - `expect` — any of `fires`, `decision` (`deny`/`allow`/`pass`/`error`/`unknown`),
-  `exitCode`, `stdoutContains`, `stderrContains`, `timedOut`. Only the fields you set
-  are asserted.
+  `exitCode`, `stdoutContains`, `stderrContains`, `context`, `updatedInput`, `timedOut`.
+  Only the fields you set are asserted. `context` compares by exact deep equality
+  against `hookSpecificOutput.additionalContext`; `updatedInput` compares the same way
+  against `hookSpecificOutput.updatedInput`. Either is satisfied by any one firing
+  hook's own value, and a mismatch (including no firing hook emitting the key at all)
+  fails.
 - `stub` — map an exact hook `command` string to a canned `{ exitCode }` instead of
   actually spawning it.
 - `dryRun: true` — skip execution for this one case, the same effect `--dry-run` has for

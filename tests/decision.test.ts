@@ -10,6 +10,7 @@ import {
   errored,
   exit2OverridesAllowJson,
   passed,
+  readHookOutput,
   resolveDecision,
   unknownDecision,
 } from "../src/internal/decision/index.js";
@@ -698,5 +699,84 @@ describe("combineDecisions", () => {
     ];
 
     expect(combineDecisions(decisions).index).toBe(0);
+  });
+});
+
+describe("readHookOutput", () => {
+  it("reads hookSpecificOutput.additionalContext and .updatedInput from JSON stdout", () => {
+    const outcome = makeOutcome({
+      stdout: JSON.stringify({
+        hookSpecificOutput: {
+          additionalContext: "extra context for the model",
+          updatedInput: { command: "git push" },
+        },
+      }),
+    });
+
+    expect(readHookOutput(outcome)).toEqual({
+      additionalContext: "extra context for the model",
+      updatedInput: { command: "git push" },
+    });
+  });
+
+  it.each([
+    ["empty stdout", ""],
+    ["plain-text stdout that does not look like JSON", "hook finished successfully"],
+    ["stdout that looks like JSON but fails to parse", "{not valid json"],
+    ["JSON that parses to an array rather than a plain object", "[1, 2, 3]"],
+  ])("both fields are undefined for %s", (_label, stdout) => {
+    const outcome = makeOutcome({ stdout });
+
+    expect(readHookOutput(outcome)).toEqual({
+      additionalContext: undefined,
+      updatedInput: undefined,
+    });
+  });
+
+  it("both fields are undefined for well-formed JSON with no hookSpecificOutput at all", () => {
+    const outcome = makeOutcome({ stdout: JSON.stringify({ decision: "allow" }) });
+
+    expect(readHookOutput(outcome)).toEqual({
+      additionalContext: undefined,
+      updatedInput: undefined,
+    });
+  });
+
+  it("both fields are undefined when hookSpecificOutput itself is not a plain object", () => {
+    const outcome = makeOutcome({
+      stdout: JSON.stringify({ hookSpecificOutput: "not-an-object" }),
+    });
+
+    expect(readHookOutput(outcome)).toEqual({
+      additionalContext: undefined,
+      updatedInput: undefined,
+    });
+  });
+
+  it("only reads the nested hookSpecificOutput location — top-level additionalContext/updatedInput keys are ignored", () => {
+    const outcome = makeOutcome({
+      stdout: JSON.stringify({
+        additionalContext: "top-level, not Claude Code's documented location",
+        updatedInput: { command: "top-level too" },
+      }),
+    });
+
+    expect(readHookOutput(outcome)).toEqual({
+      additionalContext: undefined,
+      updatedInput: undefined,
+    });
+  });
+
+  it("reads whichever of the two keys hookSpecificOutput carries, leaving the other undefined", () => {
+    const outcome = makeOutcome({
+      stdout: JSON.stringify({
+        hookSpecificOutput: { additionalContext: "context only" },
+      }),
+    });
+
+    expect(readHookOutput(outcome)).toEqual({
+      additionalContext: "context only",
+      updatedInput: undefined,
+    });
   });
 });

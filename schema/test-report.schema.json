@@ -293,6 +293,24 @@
             "expectedTimedOut": { "type": "boolean" },
             "actualTimedOut": { "type": "boolean" }
           }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["field", "expectedContext", "actualContext"],
+          "properties": {
+            "field": { "const": "context" },
+            "expectedContext": {},
+            "actualContext": {}
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["field", "expectedUpdatedInput", "actualUpdatedInput"],
+          "properties": {
+            "field": { "const": "updatedInput" },
+            "expectedUpdatedInput": {},
+            "actualUpdatedInput": {}
+          }
         }
       ]
     },

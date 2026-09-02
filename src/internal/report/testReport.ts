@@ -127,7 +127,16 @@ function describeDiff(diff: ExpectationDiff): string {
       return `stderrContains: expected stderr to contain ${JSON.stringify(diff.expectedSubstring)}, got ${JSON.stringify(diff.actualStderr)}`;
     case "timedOut":
       return `timedOut: expected ${String(diff.expectedTimedOut)}, got ${String(diff.actualTimedOut)}`;
+    case "context":
+      return `context: expected ${jsonOrAbsent(diff.expectedContext)}, got ${jsonOrAbsent(diff.actualContext)}`;
+    case "updatedInput":
+      return `updatedInput: expected ${jsonOrAbsent(diff.expectedUpdatedInput)}, got ${jsonOrAbsent(diff.actualUpdatedInput)}`;
   }
+}
+
+/** `JSON.stringify(value)`, or the literal `"absent"` for `undefined` — `JSON.stringify(undefined)` itself returns `undefined`, not a string. */
+function jsonOrAbsent(value: unknown): string {
+  return value === undefined ? "absent" : JSON.stringify(value);
 }
 
 /** `<command> (<file>:<line>)` for the hook a multi-hook case's verdict came from. */
@@ -340,6 +349,38 @@ function toJsonNonFiringExplanation(
 }
 
 /**
+ * `ExpectationDiff`, with a `"context"`/`"updatedInput"` diff's
+ * `actualContext`/`actualUpdatedInput` normalized to `null` when no firing
+ * hook emitted the key.
+ *
+ * @remarks
+ * `JSON.stringify` drops an object property whose value is `undefined`
+ * outright, rather than emitting `null` for it — the same gap
+ * {@link toJsonPayloadOrigin} exists to close for a `"recorded"` origin's
+ * `claudeVersion` — which `schema/test-report.schema.json`'s
+ * `additionalProperties: false` plus full `required` list would then reject
+ * as a missing key. `??` rather than `||`: a hook that legitimately emitted
+ * `additionalContext: false` or `""` must stay that value, not become
+ * `null`. The other six variants never carry `undefined`, so they pass
+ * through unchanged.
+ */
+function toJsonExpectationDiff(diff: ExpectationDiff): ExpectationDiff {
+  switch (diff.field) {
+    case "fires":
+    case "decision":
+    case "exitCode":
+    case "stdoutContains":
+    case "stderrContains":
+    case "timedOut":
+      return diff;
+    case "context":
+      return { ...diff, actualContext: diff.actualContext ?? null };
+    case "updatedInput":
+      return { ...diff, actualUpdatedInput: diff.actualUpdatedInput ?? null };
+  }
+}
+
+/**
  * `CaseResult`, mapped field by field to the shape
  * `schema/test-report.schema.json` describes: every value `CaseResult` may
  * leave absent (`decidedBy`, a `"fail"` result's `nonFiring`, a `"recorded"`
@@ -390,7 +431,7 @@ function toJsonCaseResult(result: CaseResult): JsonCaseResult {
       return {
         kind: "fail",
         origin,
-        diffs: result.diffs,
+        diffs: result.diffs.map(toJsonExpectationDiff),
         nonFiring:
           result.nonFiring === undefined
             ? null

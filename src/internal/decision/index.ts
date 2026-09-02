@@ -15,3 +15,5 @@ export { allowed, denied, errored, passed, unknownDecision } from "./factory.js"
 export { canProduceDeny, exit2OverridesAllowJson, resolveDecision } from "./resolve.js";
 export { combineDecisions } from "./combine.js";
 export type { CombinedDecision } from "./combine.js";
+export { readHookOutput } from "./read-output.js";
+export type { HookOutput } from "./read-output.js";

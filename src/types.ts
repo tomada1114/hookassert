@@ -445,6 +445,34 @@ export type ExpectationDiff =
       readonly expectedTimedOut: boolean;
       /** Whether the hook actually timed out. */
       readonly actualTimedOut: boolean;
+    }
+  | {
+      /**
+       * No firing hook's `hookSpecificOutput.additionalContext` deep-equaled
+       * `expect.context`.
+       */
+      readonly field: "context";
+      /** The fixture's declared `expect.context`. */
+      readonly expectedContext: unknown;
+      /**
+       * `hookSpecificOutput.additionalContext` from the first firing hook
+       * that emitted it, or `undefined` when no firing hook did.
+       */
+      readonly actualContext: unknown;
+    }
+  | {
+      /**
+       * No firing hook's `hookSpecificOutput.updatedInput` deep-equaled
+       * `expect.updatedInput`.
+       */
+      readonly field: "updatedInput";
+      /** The fixture's declared `expect.updatedInput`. */
+      readonly expectedUpdatedInput: unknown;
+      /**
+       * `hookSpecificOutput.updatedInput` from the first firing hook that
+       * emitted it, or `undefined` when no firing hook did.
+       */
+      readonly actualUpdatedInput: unknown;
     };
 
 /**

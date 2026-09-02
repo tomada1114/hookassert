@@ -717,6 +717,22 @@ describe("ExpectationDiff", () => {
           }>();
           break;
         }
+        case "context": {
+          expectTypeOf(diff).toEqualTypeOf<{
+            readonly field: "context";
+            readonly expectedContext: unknown;
+            readonly actualContext: unknown;
+          }>();
+          break;
+        }
+        case "updatedInput": {
+          expectTypeOf(diff).toEqualTypeOf<{
+            readonly field: "updatedInput";
+            readonly expectedUpdatedInput: unknown;
+            readonly actualUpdatedInput: unknown;
+          }>();
+          break;
+        }
       }
     };
     narrow({ field: "fires", expectedFires: true, actualFires: false });
@@ -733,6 +749,16 @@ describe("ExpectationDiff", () => {
       actualStderr: "",
     });
     narrow({ field: "timedOut", expectedTimedOut: true, actualTimedOut: false });
+    narrow({
+      field: "context",
+      expectedContext: "expected",
+      actualContext: "actual",
+    });
+    narrow({
+      field: "updatedInput",
+      expectedUpdatedInput: { command: "git push" },
+      actualUpdatedInput: undefined,
+    });
   });
 });
 
