@@ -2,11 +2,20 @@
  * The one place a `--format` value turns into an actual rendering.
  *
  * @remarks
- * Static layer: pure — no I/O, no process, no write. `explain` calls
- * {@link renderInFormat} today; `lint` and `test` route through it unchanged
- * once they exist, each supplying its own {@link FormatRenderers} for its own
- * result shape, so the three subcommands can never drift on which formats
- * exist or silently reimplement the same `switch` three times.
+ * Static layer: pure — no I/O, no process, no write. `explain`, `lint`, and
+ * `test` each call {@link renderInFormat}, supplying their own
+ * {@link FormatRenderers} for their own result shape, so the three
+ * subcommands can never drift on which formats exist or silently reimplement
+ * the same `switch` three times.
+ *
+ * Each of those three shapes' own `reportVersion` (`JsonExplainReport` in
+ * `report/json.ts`, `JsonTestReport` in `report/testReport.ts`,
+ * `JsonLintReport` in `report/lintReport.ts`) is versioned independently, and
+ * so is its own shipped schema — `schema/explain-report.schema.json`,
+ * `schema/test-report.schema.json`, and `schema/lint-report.schema.json`,
+ * respectively. This is the one place that rule is written down: bump a
+ * shape's `reportVersion` and update its schema in the same change. Each
+ * shape's own module points back at this remark rather than restating it.
  */
 
 import { UsageError } from "../errors.js";
@@ -23,8 +32,8 @@ export function isReportFormat(value: string): value is ReportFormat {
 
 /**
  * One renderer per {@link ReportFormat}, all rendering the same report shape
- * `T` — `ExplainReport` for `explain` today, whatever `lint`/`test` produce
- * once they exist.
+ * `T` — `ExplainReport` for `explain`, `TestReport` for `test`, `LintReport`
+ * for `lint`.
  */
 export interface FormatRenderers<T> {
   readonly pretty: (report: T) => string;

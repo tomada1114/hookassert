@@ -1,13 +1,15 @@
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { Ajv } from "ajv";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { runCli } from "../src/cli.js";
 import { UsageError } from "../src/internal/errors.js";
 import { createUnimplementedSpawner } from "../src/internal/exec/index.js";
+import type { Spawner, SpawnRequest } from "../src/internal/exec/index.js";
 import type { MatcherOutcome } from "../src/internal/matcher/index.js";
 import {
   isReportFormat,
@@ -24,10 +26,13 @@ import {
   type ReportFinding,
 } from "../src/internal/report/index.js";
 import { hooksForEvent, loadSettings } from "../src/internal/settings/index.js";
-import type { Provenance, ResolvedHook } from "../src/types.js";
+import type { ExecOutcome, Provenance, ResolvedHook } from "../src/types.js";
 
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
-const SCHEMA_PATH = path.join(REPO_ROOT, "schema", "report.schema.json");
+const SCHEMA_DIR = path.join(REPO_ROOT, "schema");
+const EXPLAIN_SCHEMA_PATH = path.join(SCHEMA_DIR, "explain-report.schema.json");
+const TEST_SCHEMA_PATH = path.join(SCHEMA_DIR, "test-report.schema.json");
+const LINT_SCHEMA_PATH = path.join(SCHEMA_DIR, "lint-report.schema.json");
 const FIXTURES_DIR = fileURLToPath(new URL("./fixtures/cli/", import.meta.url));
 const PROJECT_WITH_HOOKS_DIR = path.join(FIXTURES_DIR, "project-with-hooks");
 const PROJECT_SETTINGS_FILE = path.join(
@@ -38,12 +43,29 @@ const PROJECT_SETTINGS_FILE = path.join(
 const SETTINGS_FIXTURES_DIR = fileURLToPath(
   new URL("./fixtures/settings/", import.meta.url),
 );
+const MINIMAL_SPEC_PATH = fileURLToPath(
+  new URL("./fixtures/spec/valid-minimal.json", import.meta.url),
+);
+const LINT_VIOLATING_FIXTURE = fileURLToPath(
+  new URL("./fixtures/lint/matcher-is-array/violating.json", import.meta.url),
+);
 
 /** The shipped spec's own declared range, from `spec/claude-code-2.1.251-2.2.0.json`. */
 const SPEC_RANGE = ">=2.1.251 <2.2.0";
 
+function readJsonFile(filePath: string): unknown {
+  return JSON.parse(readFileSync(filePath, "utf8")) as unknown;
+}
+
 function readSchema(): unknown {
-  return JSON.parse(readFileSync(SCHEMA_PATH, "utf8")) as unknown;
+  return readJsonFile(EXPLAIN_SCHEMA_PATH);
+}
+
+/** Compile and validate `document` against the schema at `schemaPath`, returning ajv's own verdict. */
+function validatesAgainstSchema(schemaPath: string, document: unknown): boolean {
+  const ajv = new Ajv({ allErrors: true, strict: false });
+  const validate = ajv.compile(readJsonFile(schemaPath) as object);
+  return validate(document);
 }
 
 function makeProvenance(overrides: Partial<Provenance> = {}): Provenance {
@@ -105,7 +127,7 @@ function requireHookByMatcher(
 // --- renderJson --------------------------------------------------------------
 
 describe("renderJson", () => {
-  it("validates against schema/report.schema.json for a representative report", () => {
+  it("validates against schema/explain-report.schema.json for a representative report", () => {
     const hook = makeHook();
     const rejected: MatcherOutcome = {
       hook: makeHook({ matcher: "Write", command: "./scripts/write-guard.sh" }),
@@ -582,5 +604,345 @@ describe("header content is substantively equivalent across pretty, json, and gi
     expect(renderPretty(report)).toContain("Claude Code version: undetermined");
     expect(toJsonReport(report).header.claudeVersion).toBe("undetermined");
     expect(renderGithub(report)).toContain("Claude Code version: undetermined");
+  });
+});
+
+// --- shared $defs stay identical across the three shipped schemas -----------
+
+describe("the three shipped report schemas", () => {
+  it("carry an identical copy of every $def more than one of them declares", () => {
+    const schemas: Readonly<Record<string, Record<string, unknown>>> = {
+      "explain-report.schema.json": readJsonFile(EXPLAIN_SCHEMA_PATH) as Record<
+        string,
+        unknown
+      >,
+      "test-report.schema.json": readJsonFile(TEST_SCHEMA_PATH) as Record<
+        string,
+        unknown
+      >,
+      "lint-report.schema.json": readJsonFile(LINT_SCHEMA_PATH) as Record<
+        string,
+        unknown
+      >,
+    };
+
+    const defsByFile = Object.entries(schemas).map(
+      ([name, schema]) => [name, schema["$defs"] as Record<string, unknown>] as const,
+    );
+
+    const defNames = new Set(defsByFile.flatMap(([, defs]) => Object.keys(defs)));
+    let comparedAtLeastOneSharedDef = false;
+
+    for (const defName of defNames) {
+      const owners = defsByFile.filter(([, defs]) => defName in defs);
+      if (owners.length < 2) {
+        continue;
+      }
+      comparedAtLeastOneSharedDef = true;
+      const [firstOwnerName, firstOwnerDefs] = owners[0] ?? ["", {}];
+      for (const [ownerName, ownerDefs] of owners.slice(1)) {
+        expect(
+          ownerDefs[defName],
+          `$defs.${defName} in ${ownerName} must match ${firstOwnerName}`,
+        ).toEqual(firstOwnerDefs[defName]);
+      }
+    }
+
+    // `header` is declared by all three; a false-positive pass (nothing
+    // compared because the file names above drifted from the $defs keys
+    // below) would otherwise let this test go green for the wrong reason.
+    expect(comparedAtLeastOneSharedDef).toBe(true);
+    expect(defNames.has("header")).toBe(true);
+  });
+});
+
+// --- test/lint: schema validation against a real rendering ------------------
+
+/** A canned `ExecOutcome` `ScriptedSpawner` resolves to for one configured `command`. */
+interface ScriptedOutcome {
+  readonly exitCode: number;
+  readonly stdout?: string;
+  readonly stderr?: string;
+  readonly timedOut?: boolean;
+}
+
+/**
+ * Resolves every spawn request from a canned lookup keyed by `req.command`,
+ * without ever actually spawning a process — this suite lives in the fast
+ * unit project and must never launch a real subprocess.
+ */
+class ScriptedSpawner implements Spawner {
+  readonly calls: SpawnRequest[] = [];
+  readonly #byCommand: ReadonlyMap<string, ScriptedOutcome>;
+
+  constructor(byCommand: ReadonlyMap<string, ScriptedOutcome>) {
+    this.#byCommand = byCommand;
+  }
+
+  spawn(req: SpawnRequest): Promise<ExecOutcome> {
+    this.calls.push(req);
+    const outcome = this.#byCommand.get(req.command) ?? { exitCode: 0 };
+    return Promise.resolve({
+      exitCode: outcome.exitCode,
+      stdout: outcome.stdout ?? "",
+      stderr: outcome.stderr ?? "",
+      timedOut: outcome.timedOut ?? false,
+    });
+  }
+}
+
+/** The loosely typed shape this suite reads back out of `renderTestJson`'s output. */
+interface JsonExpectationDiffShape {
+  readonly field: string;
+}
+interface JsonNonFiringExplanationShape {
+  readonly kind: string;
+}
+interface JsonUnknownReasonShape {
+  readonly kind: string;
+}
+interface JsonCaseResultShape {
+  readonly kind: string;
+  readonly diffs?: readonly JsonExpectationDiffShape[];
+  readonly nonFiring?: JsonNonFiringExplanationShape | null;
+  readonly reasons?: readonly JsonUnknownReasonShape[];
+}
+interface JsonTestCaseShape {
+  readonly event: string;
+  readonly tool: string | null;
+  readonly result: JsonCaseResultShape;
+}
+interface JsonTestReportForAssertions {
+  readonly reportVersion: string;
+  readonly reportType: string;
+  readonly cases: readonly JsonTestCaseShape[];
+}
+
+describe("renderTestJson: schema validation against a real rendering", () => {
+  let projectDir: string;
+
+  function commandGroup(matcher: string | undefined, command: string): unknown {
+    return {
+      ...(matcher === undefined ? {} : { matcher }),
+      hooks: [{ type: "command", command }],
+    };
+  }
+
+  const CMD_BASH_PASS = "cmd-bash-pass";
+  const CMD_WRITE_DENY = "cmd-write-deny";
+  const CMD_EDIT_EXIT0 = "cmd-edit-exit0";
+  const CMD_GREP_STDOUT = "cmd-grep-stdout";
+  const CMD_GLOB_STDERR = "cmd-glob-stderr";
+  const CMD_WEBFETCH_TIMEOUT = "cmd-webfetch-timeout";
+  const CMD_NOTIFICATION_NOOP = "cmd-notification-noop";
+  const CMD_STOP_LOCAL_ONLY = "cmd-stop-local-only";
+
+  beforeAll(() => {
+    projectDir = mkdtempSync(path.join(tmpdir(), "hookassert-reporters-test-schema-"));
+    mkdirSync(path.join(projectDir, ".claude"), { recursive: true });
+
+    // The project layer: every hook a case in this suite's fixture asserts
+    // against, except `Stop`'s — declared only in the local layer below, so
+    // a fixture that excludes that layer produces `excluded-settings-layer`.
+    const projectSettings = {
+      hooks: {
+        PreToolUse: [
+          commandGroup("Bash", CMD_BASH_PASS),
+          commandGroup("Write", CMD_WRITE_DENY),
+          commandGroup("Edit", CMD_EDIT_EXIT0),
+          commandGroup("Grep", CMD_GREP_STDOUT),
+          commandGroup("Glob", CMD_GLOB_STDERR),
+          commandGroup("WebFetch", CMD_WEBFETCH_TIMEOUT),
+        ],
+        Notification: [commandGroup(undefined, CMD_NOTIFICATION_NOOP)],
+      },
+    };
+    writeFileSync(
+      path.join(projectDir, ".claude", "settings.json"),
+      JSON.stringify(projectSettings, null, 2),
+    );
+
+    const localSettings = {
+      hooks: {
+        Stop: [commandGroup(undefined, CMD_STOP_LOCAL_ONLY)],
+      },
+    };
+    writeFileSync(
+      path.join(projectDir, ".claude", "settings.local.json"),
+      JSON.stringify(localSettings, null, 2),
+    );
+  });
+
+  afterAll(() => {
+    rmSync(projectDir, { recursive: true, force: true });
+  });
+
+  it("validates every CaseResult.kind, ExpectationDiff.field, NonFiringExplanation.kind, and an unknown reason against schema/test-report.schema.json", async () => {
+    const fixture = {
+      // Restricts candidates to the project layer only: `Stop`'s hook,
+      // declared solely in `.claude/settings.local.json` above, is thereby
+      // excluded rather than merely unmatched.
+      settings: [".claude/settings.json"],
+      cases: [
+        // "pass", decidedBy set.
+        {
+          event: "PreToolUse",
+          tool: "Bash",
+          expect: { decision: "pass", exitCode: 0 },
+        },
+        // "fail" via an ExpectationDiff.field: "fires" (something fired
+        // despite `expect.fires: false`).
+        { event: "PreToolUse", tool: "Bash", expect: { fires: false } },
+        // "fail" via field: "decision" (denies via exit 2, expected allow).
+        { event: "PreToolUse", tool: "Write", expect: { decision: "allow" } },
+        // "fail" via field: "exitCode".
+        { event: "PreToolUse", tool: "Edit", expect: { exitCode: 5 } },
+        // "fail" via field: "stdoutContains".
+        {
+          event: "PreToolUse",
+          tool: "Grep",
+          expect: { stdoutContains: "never-printed-marker" },
+        },
+        // "fail" via field: "stderrContains".
+        {
+          event: "PreToolUse",
+          tool: "Glob",
+          expect: { stderrContains: "never-printed-marker" },
+        },
+        // "fail" via field: "timedOut".
+        {
+          event: "PreToolUse",
+          tool: "WebFetch",
+          expect: { timedOut: false },
+        },
+        // "fail" via NonFiringExplanation.kind: "matcher-did-not-match" — six
+        // candidates are declared under PreToolUse, none matches "Read".
+        { event: "PreToolUse", tool: "Read", expect: { fires: true } },
+        // "fail" via NonFiringExplanation.kind: "no-hook-configured" —
+        // nothing is declared under SessionStart anywhere.
+        { event: "SessionStart", expect: { fires: true } },
+        // "fail" via NonFiringExplanation.kind: "excluded-settings-layer" —
+        // Stop's only hook lives in the excluded local layer.
+        { event: "Stop", expect: { fires: true } },
+        // "unknown" via an UnknownReason.kind: "event-not-in-spec" —
+        // Notification has no entry in valid-minimal.json's spec.
+        { event: "Notification", expect: {} },
+        // "skipped", reason "dry-run".
+        {
+          event: "PreToolUse",
+          tool: "Bash",
+          dryRun: true,
+          expect: { decision: "pass" },
+        },
+        // "skipped", reason "stub-only".
+        {
+          event: "PreToolUse",
+          tool: "Bash",
+          stub: { [CMD_BASH_PASS]: { exitCode: 0 } },
+          expect: {},
+        },
+      ],
+    };
+    const fixturePath = path.join(projectDir, "schema-coverage.yaml");
+    writeFileSync(fixturePath, JSON.stringify(fixture, null, 2));
+
+    const spawner = new ScriptedSpawner(
+      new Map<string, ScriptedOutcome>([
+        [CMD_BASH_PASS, { exitCode: 0 }],
+        [CMD_WRITE_DENY, { exitCode: 2 }],
+        [CMD_EDIT_EXIT0, { exitCode: 0 }],
+        [CMD_GREP_STDOUT, { exitCode: 0, stdout: "actual-stdout" }],
+        [CMD_GLOB_STDERR, { exitCode: 0, stderr: "actual-stderr" }],
+        [CMD_WEBFETCH_TIMEOUT, { exitCode: -1, timedOut: true }],
+        [CMD_NOTIFICATION_NOOP, { exitCode: 0 }],
+      ]),
+    );
+
+    const result = await runCli(
+      ["test", fixturePath, "--claude-version", "2.1.300", "--yes", "--format", "json"],
+      "hookassert",
+      {
+        cwd: projectDir,
+        home: path.join(FIXTURES_DIR, "no-such-directory"),
+        env: {},
+        specPath: MINIMAL_SPEC_PATH,
+        spawner,
+      },
+    );
+
+    // 9 of the 13 cases fail — `resolveTestExitCode` returns 1 whenever
+    // `summary.failed > 0`, regardless of `--ci`.
+    expect(result.exitCode).toBe(1);
+    const parsed: unknown = JSON.parse(result.stdout);
+    expect(validatesAgainstSchema(TEST_SCHEMA_PATH, parsed)).toBe(true);
+
+    const report = parsed as JsonTestReportForAssertions;
+    expect(report.reportType).toBe("test");
+
+    const kinds = new Set(report.cases.map((c) => c.result.kind));
+    expect(kinds).toEqual(new Set(["pass", "fail", "unknown", "skipped"]));
+
+    const diffFields = new Set(
+      report.cases.flatMap((c) => (c.result.diffs ?? []).map((d) => d.field)),
+    );
+    expect(diffFields).toEqual(
+      new Set([
+        "fires",
+        "decision",
+        "exitCode",
+        "stdoutContains",
+        "stderrContains",
+        "timedOut",
+      ]),
+    );
+
+    const nonFiringKinds = new Set(
+      report.cases
+        .map((c) => c.result.nonFiring)
+        .filter((n): n is JsonNonFiringExplanationShape => n != null)
+        .map((n) => n.kind),
+    );
+    expect(nonFiringKinds).toEqual(
+      new Set([
+        "matcher-did-not-match",
+        "no-hook-configured",
+        "excluded-settings-layer",
+      ]),
+    );
+
+    const unknownReasonKinds = new Set(
+      report.cases.flatMap((c) => (c.result.reasons ?? []).map((r) => r.kind)),
+    );
+    expect(unknownReasonKinds).toContain("event-not-in-spec");
+
+    // The one case whose failure is a `diffs` mismatch (not `nonFiring`)
+    // must still carry `nonFiring: null`, not an absent key — issue #43's
+    // own completion criterion.
+    const decisionDiffCase = report.cases.find(
+      (c) => c.event === "PreToolUse" && c.tool === "Write",
+    );
+    expect(decisionDiffCase?.result.nonFiring).toBeNull();
+  });
+});
+
+describe("renderLintJson: schema validation against a real rendering", () => {
+  it("validates a real lint finding against schema/lint-report.schema.json", async () => {
+    const result = await runCli(
+      ["lint", "--settings", LINT_VIOLATING_FIXTURE, "--format", "json"],
+      "hookassert",
+      {
+        cwd: PROJECT_WITH_HOOKS_DIR,
+        home: path.join(FIXTURES_DIR, "no-such-directory"),
+        env: {},
+      },
+    );
+
+    expect(result.exitCode).toBe(1);
+    const parsed: unknown = JSON.parse(result.stdout);
+    expect(validatesAgainstSchema(LINT_SCHEMA_PATH, parsed)).toBe(true);
+
+    const report = parsed as { reportType: string; findings: readonly unknown[] };
+    expect(report.reportType).toBe("lint");
+    expect(report.findings.length).toBeGreaterThan(0);
   });
 });

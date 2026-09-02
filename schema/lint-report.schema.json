@@ -1,0 +1,51 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/tomada1114/hookassert/schema/lint-report.schema.json",
+  "title": "hookassert lint JSON report",
+  "description": "Schema for `lint --format json`'s output (src/internal/report/lintReport.ts): the fixed, versioned contract downstream CI tooling may parse directly. `reportVersion` is versioned independently of `schema/explain-report.schema.json` and `schema/test-report.schema.json` — see `src/internal/report/format.ts`'s `renderInFormat` remark for the rule governing all three.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["reportVersion", "reportType", "header", "findings"],
+  "properties": {
+    "reportVersion": {
+      "const": "1",
+      "description": "Version of this report shape, independent of the package's own semver."
+    },
+    "reportType": {
+      "const": "lint",
+      "description": "Discriminates this shape from other hookassert JSON report shapes (`explain`'s, `test`'s), which reuse `reportVersion: \"1\"` for their own, independently versioned shapes."
+    },
+    "header": { "$ref": "#/$defs/header" },
+    "findings": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/finding" }
+    }
+  },
+  "$defs": {
+    "header": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["claudeVersion", "specRange", "notices"],
+      "properties": {
+        "claudeVersion": { "type": "string", "minLength": 1 },
+        "specRange": { "type": "string", "minLength": 1 },
+        "notices": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file", "line", "ruleId", "message", "suggestion"],
+      "properties": {
+        "file": { "type": "string", "minLength": 1 },
+        "line": { "type": "integer", "minimum": 1 },
+        "ruleId": { "type": "string", "minLength": 1 },
+        "message": { "type": "string", "minLength": 1 },
+        "suggestion": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

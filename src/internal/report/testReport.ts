@@ -14,6 +14,7 @@
 
 import type {
   CaseResult,
+  Decision,
   DecidingHook,
   EventName,
   ExpectationDiff,
@@ -27,6 +28,7 @@ import {
   renderGithubFinding,
   renderGithubHeader,
 } from "./github.js";
+import { toJsonHook, type JsonHook } from "./json.js";
 import type { ReportHeader } from "./summary.js";
 
 /** One fixture case's result, identified by which file and position it came from. */
@@ -203,50 +205,168 @@ export function renderTestPretty(report: TestReport): string {
 }
 
 /**
- * `CaseResult`, with `decidedBy` normalized to `null` rather than dropped
- * when absent.
+ * JSON shape of a {@link PayloadOrigin}'s `"recorded"` member, with
+ * `claudeVersion` normalized to `null` rather than dropped when the envelope
+ * carried none.
  *
  * @remarks
  * `JSON.stringify` omits an object property whose value is `undefined`
- * rather than emitting `null` for it, so `CaseResult.decidedBy` would
- * silently vanish from a `"pass"`/`"unknown"` result's JSON rather than
- * appearing as the explicit `null` a consumer can rely on being present.
- * `toJsonCaseResult` is the one place that substitution happens.
+ * rather than emitting `null` for it, so a `"recorded"` origin whose envelope
+ * carries no `claudeVersion` would silently drop the key from the JSON
+ * rather than appearing as the explicit `null` `schema/test-report.schema.json`
+ * requires.
+ */
+type JsonPayloadOrigin =
+  | {
+      readonly kind: "recorded";
+      readonly capturedAt: string;
+      readonly sourceFile: string;
+      readonly claudeVersion: string | null;
+    }
+  | {
+      readonly kind: "synthetic";
+    };
+
+/** Build the {@link JsonPayloadOrigin} for one {@link PayloadOrigin}. */
+function toJsonPayloadOrigin(origin: PayloadOrigin): JsonPayloadOrigin {
+  if (origin.kind === "synthetic") {
+    return origin;
+  }
+  return {
+    kind: "recorded",
+    capturedAt: origin.capturedAt,
+    sourceFile: origin.sourceFile,
+    claudeVersion: origin.claudeVersion ?? null,
+  };
+}
+
+/**
+ * JSON shape of a {@link DecidingHook}, with its own `hook` converted through
+ * `json.ts`'s {@link toJsonHook} rather than left as a raw `ResolvedHook` —
+ * whose `matcher`/`args`/`timeoutMs` are `T | undefined`, which
+ * `JSON.stringify` would drop the same way an un-mapped `nonFiring` would.
+ */
+interface JsonDecidingHook {
+  readonly hook: JsonHook;
+  readonly decision: Decision;
+}
+
+/** Build the {@link JsonDecidingHook} for one {@link DecidingHook}. */
+function toJsonDecidingHook(decidedBy: DecidingHook): JsonDecidingHook {
+  return { hook: toJsonHook(decidedBy.hook), decision: decidedBy.decision };
+}
+
+/** `CaseResult`'s `decidedBy`, converted and `undefined` normalized to `null`. */
+function toJsonDecidedBy(decidedBy: DecidingHook | undefined): JsonDecidingHook | null {
+  return decidedBy === undefined ? null : toJsonDecidingHook(decidedBy);
+}
+
+/** JSON shape of a {@link NonFiringExplanation}, with every `ResolvedHook` it carries converted through {@link toJsonHook}. */
+type JsonNonFiringExplanation =
+  | {
+      readonly kind: "matcher-did-not-match";
+      readonly hooks: readonly { readonly hook: JsonHook; readonly reason: string }[];
+    }
+  | {
+      readonly kind: "no-hook-configured";
+      readonly event: EventName;
+    }
+  | {
+      readonly kind: "excluded-settings-layer";
+      readonly hooks: readonly JsonHook[];
+    };
+
+/** Build the {@link JsonNonFiringExplanation} for one {@link NonFiringExplanation}. */
+function toJsonNonFiringExplanation(
+  nonFiring: NonFiringExplanation,
+): JsonNonFiringExplanation {
+  switch (nonFiring.kind) {
+    case "matcher-did-not-match":
+      return {
+        kind: "matcher-did-not-match",
+        hooks: nonFiring.hooks.map((rejected) => ({
+          hook: toJsonHook(rejected.hook),
+          reason: rejected.reason,
+        })),
+      };
+    case "no-hook-configured":
+      return nonFiring;
+    case "excluded-settings-layer":
+      return {
+        kind: "excluded-settings-layer",
+        hooks: nonFiring.hooks.map((hook) => toJsonHook(hook)),
+      };
+  }
+}
+
+/**
+ * `CaseResult`, mapped field by field to the shape
+ * `schema/test-report.schema.json` describes: every value `CaseResult` may
+ * leave absent (`decidedBy`, a `"fail"` result's `nonFiring`, a `"recorded"`
+ * origin's `claudeVersion`, a `decidedBy`/`nonFiring` hook's own `matcher`/
+ * `args`/`timeoutMs`) is written out as an explicit `null` rather than an
+ * omitted key, and `additionalProperties: false` plus a full `required` list
+ * in the schema is honest about what every rendering actually carries.
+ *
+ * @remarks
+ * Deliberately not a `CaseResult` pass-through (`{ ...result, ... }`): a
+ * field added to `CaseResult` later must be considered here and reflected in
+ * the schema in the same change, per `renderInFormat`'s remark
+ * (`src/internal/report/format.ts`), rather than silently reaching the JSON
+ * report — or silently failing to — without anyone noticing.
  */
 type JsonCaseResult =
   | {
       readonly kind: "pass";
-      readonly origin: PayloadOrigin;
-      readonly decidedBy: DecidingHook | null;
+      readonly origin: JsonPayloadOrigin;
+      readonly decidedBy: JsonDecidingHook | null;
     }
   | {
       readonly kind: "fail";
-      readonly origin: PayloadOrigin;
+      readonly origin: JsonPayloadOrigin;
       readonly diffs: readonly ExpectationDiff[];
-      readonly nonFiring: NonFiringExplanation | undefined;
-      readonly decidedBy: DecidingHook | null;
+      readonly nonFiring: JsonNonFiringExplanation | null;
+      readonly decidedBy: JsonDecidingHook | null;
     }
   | {
       readonly kind: "unknown";
-      readonly origin: PayloadOrigin;
+      readonly origin: JsonPayloadOrigin;
       readonly reasons: readonly [UnknownReason, ...UnknownReason[]];
-      readonly decidedBy: DecidingHook | null;
+      readonly decidedBy: JsonDecidingHook | null;
     }
   | {
       readonly kind: "skipped";
-      readonly origin: PayloadOrigin;
+      readonly origin: JsonPayloadOrigin;
       readonly reason: "dry-run" | "stub-only";
     };
 
 /** Build the {@link JsonCaseResult} `renderTestJson` emits for one `CaseResult`. */
 function toJsonCaseResult(result: CaseResult): JsonCaseResult {
-  if (result.kind === "skipped") {
-    return result;
+  const origin = toJsonPayloadOrigin(result.origin);
+  switch (result.kind) {
+    case "pass":
+      return { kind: "pass", origin, decidedBy: toJsonDecidedBy(result.decidedBy) };
+    case "fail":
+      return {
+        kind: "fail",
+        origin,
+        diffs: result.diffs,
+        nonFiring:
+          result.nonFiring === undefined
+            ? null
+            : toJsonNonFiringExplanation(result.nonFiring),
+        decidedBy: toJsonDecidedBy(result.decidedBy),
+      };
+    case "unknown":
+      return {
+        kind: "unknown",
+        origin,
+        reasons: result.reasons,
+        decidedBy: toJsonDecidedBy(result.decidedBy),
+      };
+    case "skipped":
+      return { kind: "skipped", origin, reason: result.reason };
   }
-  // Spread rather than rebuild field by field: a field added to `CaseResult`
-  // later then reaches the JSON report on its own, instead of silently
-  // vanishing from it until someone notices this function was not updated.
-  return { ...result, decidedBy: result.decidedBy ?? null };
 }
 
 /** JSON-serializable shape one {@link TestCaseReport} renders to. */
@@ -259,15 +379,17 @@ interface JsonTestCaseReport {
 }
 
 /**
- * The shape `renderTestJson` emits.
+ * The shape `renderTestJson` emits, validated by `schema/test-report.schema.json`.
  *
  * @remarks
  * `reportVersion` is versioned independently of `explain`'s own
- * `JsonExplainReport` (`report/json.ts`) — both currently claim
- * `reportVersion: "1"` for their own, different shapes. `reportType`
- * disambiguates the two: `schema/report.schema.json`, the one shipped schema
- * so far, pins its `reportType` to `"explain"` and would reject this shape,
- * which is deliberate — this shape has no schema of its own yet.
+ * `JsonExplainReport` (`report/json.ts`) and `lint`'s own `JsonLintReport`
+ * (`lintReport.ts`) — all three currently claim `reportVersion: "1"` for
+ * their own, different shapes; see `renderInFormat`'s remark
+ * (`src/internal/report/format.ts`) for the rule that keeps each shape's
+ * schema in lockstep with it. `reportType` disambiguates the three:
+ * `schema/explain-report.schema.json` pins its `reportType` to `"explain"`
+ * and would reject this shape, and vice versa.
  */
 export interface JsonTestReport {
   readonly reportVersion: "1";

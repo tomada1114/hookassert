@@ -1,0 +1,434 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/tomada1114/hookassert/schema/test-report.schema.json",
+  "title": "hookassert test JSON report",
+  "description": "Schema for `test --format json`'s output (src/internal/report/testReport.ts): the fixed, versioned contract downstream CI tooling may parse directly. `reportVersion` is versioned independently of `schema/explain-report.schema.json` and `schema/lint-report.schema.json` — see `src/internal/report/format.ts`'s `renderInFormat` remark for the rule governing all three.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["reportVersion", "reportType", "header", "cases", "summary"],
+  "properties": {
+    "reportVersion": {
+      "const": "1",
+      "description": "Version of this report shape, independent of the package's own semver."
+    },
+    "reportType": {
+      "const": "test",
+      "description": "Discriminates this shape from other hookassert JSON report shapes (`explain`'s, `lint`'s), which reuse `reportVersion: \"1\"` for their own, independently versioned shapes."
+    },
+    "header": { "$ref": "#/$defs/header" },
+    "cases": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/testCaseReport" }
+    },
+    "summary": { "$ref": "#/$defs/summary" }
+  },
+  "$defs": {
+    "header": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["claudeVersion", "specRange", "notices"],
+      "properties": {
+        "claudeVersion": { "type": "string", "minLength": 1 },
+        "specRange": { "type": "string", "minLength": 1 },
+        "notices": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file", "layer", "line", "col", "offset"],
+      "properties": {
+        "file": { "type": "string", "minLength": 1 },
+        "layer": {
+          "type": "string",
+          "enum": ["user", "project", "local", "explicit"]
+        },
+        "line": { "type": "integer", "minimum": 1 },
+        "col": { "type": "integer", "minimum": 1 },
+        "offset": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "hook": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event",
+        "matcher",
+        "command",
+        "args",
+        "timeoutMs",
+        "dedupeKey",
+        "provenance"
+      ],
+      "properties": {
+        "event": { "type": "string", "minLength": 1 },
+        "matcher": { "type": ["string", "null"] },
+        "command": { "type": "string", "minLength": 1 },
+        "args": {
+          "type": ["array", "null"],
+          "items": { "type": "string" }
+        },
+        "timeoutMs": { "type": ["number", "null"] },
+        "dedupeKey": { "type": "string", "minLength": 1 },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      }
+    },
+    "rejectedMatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hook", "reason"],
+      "properties": {
+        "hook": { "$ref": "#/$defs/hook" },
+        "reason": { "type": "string", "minLength": 1 }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "required": ["kind", "source", "exitCode"],
+          "properties": {
+            "kind": { "const": "deny" },
+            "source": {
+              "type": "string",
+              "enum": ["exit-code", "permission-decision"]
+            },
+            "exitCode": { "type": "number" }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["kind", "exitCode"],
+          "properties": {
+            "kind": { "const": "allow" },
+            "exitCode": { "type": "number" }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["kind", "exitCode"],
+          "properties": {
+            "kind": { "const": "pass" },
+            "exitCode": { "type": "number" }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["kind", "exitCode", "cause"],
+          "properties": {
+            "kind": { "const": "error" },
+            "exitCode": { "type": "number" },
+            "cause": {
+              "type": "string",
+              "enum": ["nonzero-exit-without-json", "invalid-json", "schema-violation"]
+            }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["kind", "reasons"],
+          "properties": {
+            "kind": { "const": "unknown" },
+            "reasons": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "$ref": "#/$defs/unknownReason" }
+            }
+          }
+        }
+      ]
+    },
+    "decidingHook": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hook", "decision"],
+      "properties": {
+        "hook": { "$ref": "#/$defs/hook" },
+        "decision": { "$ref": "#/$defs/decision" }
+      }
+    },
+    "unknownReason": {
+      "type": "object",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "required": ["kind", "detected", "specRange"],
+          "properties": {
+            "kind": { "const": "version-out-of-spec-range" },
+            "detected": { "type": "string", "minLength": 1 },
+            "specRange": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["kind", "triedSources"],
+          "properties": {
+            "kind": { "const": "version-undetermined" },
+            "triedSources": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": ["cli-flag", "environment-variable", "package-manifest"]
+              }
+            }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["kind", "event", "specVersion"],
+          "properties": {
+            "kind": { "const": "payload-shape-unverified" },
+            "event": { "type": "string", "minLength": 1 },
+            "specVersion": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["kind", "files"],
+          "properties": {
+            "kind": { "const": "plugin-hooks-present" },
+            "files": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["kind", "path"],
+          "properties": {
+            "kind": { "const": "managed-settings-assumed" },
+            "path": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["kind", "event", "specVersion"],
+          "properties": {
+            "kind": { "const": "event-not-in-spec" },
+            "event": { "type": "string", "minLength": 1 },
+            "specVersion": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["kind", "event", "exitCode"],
+          "properties": {
+            "kind": { "const": "contradictory-exit-code-effect" },
+            "event": { "type": "string", "minLength": 1 },
+            "exitCode": { "type": "number" }
+          }
+        }
+      ]
+    },
+    "expectationDiff": {
+      "type": "object",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "required": ["field", "expectedFires", "actualFires"],
+          "properties": {
+            "field": { "const": "fires" },
+            "expectedFires": { "type": "boolean" },
+            "actualFires": { "type": "boolean" }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["field", "expectedDecision", "actualDecision"],
+          "properties": {
+            "field": { "const": "decision" },
+            "expectedDecision": {
+              "type": "string",
+              "enum": ["deny", "allow", "pass", "error", "unknown"]
+            },
+            "actualDecision": {
+              "type": "string",
+              "enum": ["deny", "allow", "pass", "error", "unknown"]
+            }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["field", "expectedExitCode", "actualExitCode"],
+          "properties": {
+            "field": { "const": "exitCode" },
+            "expectedExitCode": { "type": "number" },
+            "actualExitCode": { "type": "number" }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["field", "expectedSubstring", "actualStdout"],
+          "properties": {
+            "field": { "const": "stdoutContains" },
+            "expectedSubstring": { "type": "string" },
+            "actualStdout": { "type": "string" }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["field", "expectedSubstring", "actualStderr"],
+          "properties": {
+            "field": { "const": "stderrContains" },
+            "expectedSubstring": { "type": "string" },
+            "actualStderr": { "type": "string" }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["field", "expectedTimedOut", "actualTimedOut"],
+          "properties": {
+            "field": { "const": "timedOut" },
+            "expectedTimedOut": { "type": "boolean" },
+            "actualTimedOut": { "type": "boolean" }
+          }
+        }
+      ]
+    },
+    "nonFiringExplanation": {
+      "type": "object",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "required": ["kind", "hooks"],
+          "properties": {
+            "kind": { "const": "matcher-did-not-match" },
+            "hooks": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/rejectedMatch" }
+            }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["kind", "event"],
+          "properties": {
+            "kind": { "const": "no-hook-configured" },
+            "event": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["kind", "hooks"],
+          "properties": {
+            "kind": { "const": "excluded-settings-layer" },
+            "hooks": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/hook" }
+            }
+          }
+        }
+      ]
+    },
+    "caseResult": {
+      "type": "object",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "required": ["kind", "origin", "decidedBy"],
+          "properties": {
+            "kind": { "const": "pass" },
+            "origin": { "$ref": "#/$defs/payloadOrigin" },
+            "decidedBy": {
+              "anyOf": [{ "$ref": "#/$defs/decidingHook" }, { "type": "null" }]
+            }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["kind", "origin", "diffs", "nonFiring", "decidedBy"],
+          "properties": {
+            "kind": { "const": "fail" },
+            "origin": { "$ref": "#/$defs/payloadOrigin" },
+            "diffs": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/expectationDiff" }
+            },
+            "nonFiring": {
+              "anyOf": [{ "$ref": "#/$defs/nonFiringExplanation" }, { "type": "null" }]
+            },
+            "decidedBy": {
+              "anyOf": [{ "$ref": "#/$defs/decidingHook" }, { "type": "null" }]
+            }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["kind", "origin", "reasons", "decidedBy"],
+          "properties": {
+            "kind": { "const": "unknown" },
+            "origin": { "$ref": "#/$defs/payloadOrigin" },
+            "reasons": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "$ref": "#/$defs/unknownReason" }
+            },
+            "decidedBy": {
+              "anyOf": [{ "$ref": "#/$defs/decidingHook" }, { "type": "null" }]
+            }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["kind", "origin", "reason"],
+          "properties": {
+            "kind": { "const": "skipped" },
+            "origin": { "$ref": "#/$defs/payloadOrigin" },
+            "reason": { "type": "string", "enum": ["dry-run", "stub-only"] }
+          }
+        }
+      ]
+    },
+    "payloadOrigin": {
+      "type": "object",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "required": ["kind", "capturedAt", "sourceFile", "claudeVersion"],
+          "properties": {
+            "kind": { "const": "recorded" },
+            "capturedAt": { "type": "string", "minLength": 1 },
+            "sourceFile": { "type": "string", "minLength": 1 },
+            "claudeVersion": { "type": ["string", "null"] }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {
+            "kind": { "const": "synthetic" }
+          }
+        }
+      ]
+    },
+    "testCaseReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file", "index", "event", "tool", "result"],
+      "properties": {
+        "file": { "type": "string", "minLength": 1 },
+        "index": { "type": "integer", "minimum": 0 },
+        "event": { "type": "string", "minLength": 1 },
+        "tool": { "type": ["string", "null"] },
+        "result": { "$ref": "#/$defs/caseResult" }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["asserted", "fromRecorded", "failed", "unknown", "skipped"],
+      "properties": {
+        "asserted": { "type": "integer", "minimum": 0 },
+        "fromRecorded": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0 },
+        "unknown": { "type": "integer", "minimum": 0 },
+        "skipped": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}
