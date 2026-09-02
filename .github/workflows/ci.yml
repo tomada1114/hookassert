@@ -160,3 +160,42 @@ jobs:
       # floor has.
       - name: Consume the packed artifact at the published Node floor
         run: node scripts/package-smoke.mjs --pack-dir .smoke
+
+  ci-annotation-proof:
+    name: GitHub annotation proof
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm run build
+
+      # Runs the built CLI's `lint --format github` against #13's own
+      # matcher-is-array violating fixture and greps the job's own stdout for
+      # the exact `::error file=…,line=…,title=…::` line that fixture
+      # produces. GitHub Actions renders any `::error` line written to stdout
+      # as an annotation automatically — this step only proves the line is
+      # produced; whether it actually renders as a visible annotation on the
+      # right diff line is a human, PR-review-time check (see this issue's
+      # PR body). Piping through `grep -F` rather than trusting the lint
+      # command's own exit code is deliberate: `lint` already exits 1 on any
+      # finding, which would make this job "pass" (fail) even if the
+      # annotation format regressed or the fixture stopped matching — grep
+      # failing when the exact line is absent is what keeps this job from
+      # passing vacuously.
+      - name: Verify the lint --format github annotation line
+        run: pnpm run ci:annotation-proof
