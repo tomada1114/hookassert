@@ -2,7 +2,7 @@
  * The active `LintRule`s the `lint` subcommand iterates.
  *
  * @remarks
- * Five matcher rules, plus six command/exit-code rules (`command-not-found`,
+ * Six matcher rules, plus six command/exit-code rules (`command-not-found`,
  * `missing-shebang`, `not-executable`, `unquoted-var`, `exit-1-policy`,
  * `exit-2-overrides-allow`). `docs/troubleshooting-map.md` maps official
  * Claude Code troubleshooting symptoms to a subset of these rule ids;
@@ -14,6 +14,7 @@ import { commandNotFoundRule } from "./rules/commandNotFound.js";
 import { exit1PolicyRule } from "./rules/exit1Policy.js";
 import { exit2OverridesAllowRule } from "./rules/exit2OverridesAllow.js";
 import { matcherCaseRule } from "./rules/matcherCase.js";
+import { matcherCatastrophicRule } from "./rules/matcherCatastrophic.js";
 import { matcherCommaVersionRule } from "./rules/matcherCommaVersion.js";
 import { matcherDeadRule } from "./rules/matcherDead.js";
 import { matcherHyphenVersionRule } from "./rules/matcherHyphenVersion.js";
@@ -32,6 +33,7 @@ export const LINT_RULES: readonly LintRule[] = [
   matcherHyphenVersionRule,
   matcherDeadRule,
   matcherUnanchoredRule,
+  matcherCatastrophicRule,
   commandNotFoundRule,
   missingShebangRule,
   notExecutableRule,

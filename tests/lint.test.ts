@@ -171,7 +171,7 @@ function commandContext(
   };
 }
 
-/** The five matcher rules a prior issue ships, in `LINT_RULES`'s own order. */
+/** The six matcher rules, in `LINT_RULES`'s own order. */
 const RULE_IDS = [
   "matcher-is-array",
   "matcher-case",
@@ -179,6 +179,7 @@ const RULE_IDS = [
   "matcher-hyphen-version",
   "matcher-dead",
   "matcher-unanchored",
+  "matcher-catastrophic",
 ] as const;
 
 /** The six command/exit-code rules this issue ships, in `LINT_RULES`'s own order. */
@@ -192,7 +193,7 @@ const COMMAND_RULE_IDS = [
 ] as const;
 
 describe("LINT_RULES: the registry", () => {
-  it("registers exactly the five matcher rules and the six command/exit-code rules", () => {
+  it("registers exactly the six matcher rules and the six command/exit-code rules", () => {
     expect(LINT_RULES.map((rule) => rule.id)).toEqual([
       ...RULE_IDS,
       ...COMMAND_RULE_IDS,
@@ -446,6 +447,56 @@ describe("matcher-unanchored", () => {
     const [finding] = rule.run(unanchoredCtx("Edit|Write.*"));
 
     expect(finding?.suggestion).toContain('"^(?:Edit|Write.*)$"');
+  });
+});
+
+describe("matcher-catastrophic", () => {
+  it("names the flagged construct in its message", () => {
+    const source = ruleFixtureSource("matcher-catastrophic", "violating.json");
+    const [finding] = ruleById("matcher-catastrophic").run(contextFor(source));
+
+    expect(finding?.message).toContain('"(a+)+$"');
+    expect(finding?.message).toContain("nested unbounded quantifier");
+    expect(finding?.message).toContain('"(a+)+"');
+  });
+
+  it("suggests rewriting without a nested quantifier, not a restatement of the message", () => {
+    const source = ruleFixtureSource("matcher-catastrophic", "violating.json");
+    const [finding] = ruleById("matcher-catastrophic").run(contextFor(source));
+
+    expect(finding?.suggestion).toContain("nested quantifier");
+    expect(finding?.suggestion).not.toBe(finding?.message);
+  });
+
+  it("never flags a matcher whose regex-path pattern has no nested unbounded quantifier", () => {
+    const source = ruleFixtureSource("matcher-catastrophic", "clean.json");
+    expect(ruleById("matcher-catastrophic").run(contextFor(source))).toEqual([]);
+  });
+
+  it("applies regardless of the event's matcherTargets.kind, unlike matcher-unanchored", () => {
+    const ctx: LintContext = {
+      spec: REAL_SPEC,
+      versionContext: UNDETERMINED,
+      // Stop's matcherTargets.kind is "none" — a target-based rule such as
+      // matcher-unanchored has no reason to run there, but a catastrophic
+      // pattern is still dangerous to compile regardless of what it would
+      // be tested against.
+      groups: [
+        {
+          file: ruleFixtureSource("matcher-catastrophic", "violating.json").path,
+          layer: "project",
+          event: "Stop",
+          line: 1,
+          matcher: { kind: "string", value: "(a+)+$" },
+        },
+      ],
+      commands: [],
+      projectRoot: REPO_ROOT,
+      pathEnv: undefined,
+      homeDir: undefined,
+    };
+    const findings = ruleById("matcher-catastrophic").run(ctx);
+    expect(findings).toHaveLength(1);
   });
 });
 

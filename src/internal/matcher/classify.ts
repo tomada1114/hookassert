@@ -16,11 +16,17 @@
  * `match.ts` fires every hook under such an event, matcher ignored, before
  * ever calling `classifyMatcher` — so this module's classification is
  * purely syntactic and never needs an `"unsupported"` verdict.
+ *
+ * A matcher on the regex path is screened by `safety.ts`'s
+ * `findCatastrophicConstruct` before it is ever handed to `new RegExp` —
+ * see that module's own remarks for why a nested unbounded quantifier
+ * degrades to `"unknown"` here instead of being compiled and run.
  */
 
 import type { EventName } from "../../types.js";
 import { isInDeclaredRange, meetsSinceVersion } from "../spec/index.js";
 import type { Spec } from "../spec/index.js";
+import { findCatastrophicConstruct } from "./safety.js";
 import type { ClassifyResult, MatcherKind, VersionContext } from "./types.js";
 
 /**
@@ -100,12 +106,16 @@ function hasUnsatisfiedNotationRule(
  *    every matcher against this run, not only version-dependent notation.
  * 3. Otherwise, `matcher` is tested against the event's exact-list character
  *    set (`narrowExactListPattern` for `narrowExactMatchEvents`,
- *    `exactListPattern` for every other event). A match that also relies on
- *    a version-gated notation (a comma or a hyphen, and only for a
- *    `"tool-name"` target — see {@link RULE_CHARACTERS}) whose
- *    `sinceVersion` the version cannot be confirmed to meet — including an
- *    undetermined version — degrades to `"unknown"` rather than silently
- *    passing as supported or failing as unsupported.
+ *    `exactListPattern` for every other event). A non-match puts `matcher`
+ *    on the regex path, where a nested unbounded quantifier — see
+ *    `safety.ts`'s `findCatastrophicConstruct` — degrades it to
+ *    `"unknown"` before it is ever compiled.
+ * 4. An exact-list match that also relies on a version-gated notation (a
+ *    comma or a hyphen, and only for a `"tool-name"` target — see
+ *    {@link RULE_CHARACTERS}) whose `sinceVersion` the version cannot be
+ *    confirmed to meet — including an undetermined version — degrades to
+ *    `"unknown"` rather than silently passing as supported or failing as
+ *    unsupported.
  */
 function classify(
   spec: Spec,
@@ -133,6 +143,13 @@ function classify(
     : spec.matcherSyntax.exactListPattern;
 
   if (!new RegExp(exactListPattern).test(matcher)) {
+    const construct = findCatastrophicConstruct(matcher);
+    if (construct !== undefined) {
+      return {
+        kind: "unknown",
+        reason: `this matcher cannot be evaluated safely: ${construct}; rewrite it without a nested quantifier`,
+      };
+    }
     return { kind: "unanchored-regex" };
   }
 

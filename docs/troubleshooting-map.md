@@ -52,10 +52,11 @@ go re-read the live page, not as a substitute for it.
 
 ## Not in this table
 
-`matcher-is-array`, `matcher-comma-version`, `matcher-hyphen-version`, and
-`matcher-unanchored` catch mistakes the fetched troubleshooting guidance does not name
-as their own symptom — a matcher declared as a JSON array; comma- or hyphen-notation
-gated behind a Claude Code version too old to support it; an unanchored regex matcher
-that over-matches beyond the tool it was written for. None of these has a distinct row
-in the page as fetched (2026-09-01); see "How to read this table" above for why the map
-does not force one.
+`matcher-is-array`, `matcher-comma-version`, `matcher-hyphen-version`,
+`matcher-unanchored`, and `matcher-catastrophic` catch mistakes the fetched
+troubleshooting guidance does not name as their own symptom — a matcher declared as a
+JSON array; comma- or hyphen-notation gated behind a Claude Code version too old to
+support it; an unanchored regex matcher that over-matches beyond the tool it was written
+for; a matcher whose pattern contains a nested unbounded quantifier and can hang instead
+of matching. None of these has a distinct row in the page as fetched (2026-09-01); see
+"How to read this table" above for why the map does not force one.
