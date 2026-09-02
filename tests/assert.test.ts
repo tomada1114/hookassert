@@ -80,6 +80,14 @@ function makeExecOutcome(overrides: Partial<ExecOutcome> = {}): ExecOutcome {
   };
 }
 
+/** `stdout` JSON carrying `hookSpecificOutput.additionalContext`/`.updatedInput`, `readHookOutput`'s documented location. */
+function hookOutputStdout(output: {
+  readonly additionalContext?: unknown;
+  readonly updatedInput?: unknown;
+}): string {
+  return JSON.stringify({ hookSpecificOutput: output });
+}
+
 function makeFired(overrides: Partial<FiredHook> = {}): FiredHook {
   return {
     hook: makeHook(),
@@ -219,6 +227,196 @@ describe("assertCase: expectation diffing", () => {
   it("a case with no expectations at all, whose hook did not fire, produces a pass CaseResult", () => {
     const caseData = makeCase();
     const result = assertCase(caseData, makeObservation());
+
+    expect(result.kind).toBe("pass");
+  });
+});
+
+describe("assertCase: expect.context and expect.updatedInput (issue #34)", () => {
+  it("expect.context passes on an exact match against hookSpecificOutput.additionalContext", () => {
+    const caseData = makeCase({
+      expect: makeExpect({ context: "extra context for the model" }),
+    });
+    const observation = makeObservation({
+      fired: [
+        makeFired({
+          execOutcome: makeExecOutcome({
+            stdout: hookOutputStdout({
+              additionalContext: "extra context for the model",
+            }),
+          }),
+        }),
+      ],
+    });
+
+    const result = assertCase(caseData, observation);
+
+    expect(result.kind).toBe("pass");
+  });
+
+  it("expect.context fails on a mismatch, with the diff carrying both sides", () => {
+    const caseData = makeCase({ expect: makeExpect({ context: "expected" }) });
+    const observation = makeObservation({
+      fired: [
+        makeFired({
+          execOutcome: makeExecOutcome({
+            stdout: hookOutputStdout({ additionalContext: "actual" }),
+          }),
+        }),
+      ],
+    });
+
+    const result = expectFail(assertCase(caseData, observation));
+
+    expect(result.diffs).toContainEqual({
+      field: "context",
+      expectedContext: "expected",
+      actualContext: "actual",
+    });
+  });
+
+  it("expect.context fails with actualContext: undefined when no firing hook emitted it", () => {
+    const caseData = makeCase({ expect: makeExpect({ context: "expected" }) });
+    const observation = makeObservation({
+      fired: [makeFired({ execOutcome: makeExecOutcome({ stdout: "not json" }) })],
+    });
+
+    const result = expectFail(assertCase(caseData, observation));
+
+    expect(result.diffs).toContainEqual({
+      field: "context",
+      expectedContext: "expected",
+      actualContext: undefined,
+    });
+  });
+
+  it("expect.updatedInput passes on an exact deep-equal match against hookSpecificOutput.updatedInput", () => {
+    const caseData = makeCase({
+      expect: makeExpect({
+        updatedInput: { command: "git push", flags: ["--dry-run"] },
+      }),
+    });
+    const observation = makeObservation({
+      fired: [
+        makeFired({
+          execOutcome: makeExecOutcome({
+            stdout: hookOutputStdout({
+              updatedInput: { command: "git push", flags: ["--dry-run"] },
+            }),
+          }),
+        }),
+      ],
+    });
+
+    const result = assertCase(caseData, observation);
+
+    expect(result.kind).toBe("pass");
+  });
+
+  it("expect.updatedInput fails on a partial (subset) match — exact equality only", () => {
+    const caseData = makeCase({ expect: makeExpect({ updatedInput: {} }) });
+    const observation = makeObservation({
+      fired: [
+        makeFired({
+          execOutcome: makeExecOutcome({
+            stdout: hookOutputStdout({ updatedInput: { command: "git push" } }),
+          }),
+        }),
+      ],
+    });
+
+    const result = expectFail(assertCase(caseData, observation));
+
+    expect(result.diffs).toContainEqual({
+      field: "updatedInput",
+      expectedUpdatedInput: {},
+      actualUpdatedInput: { command: "git push" },
+    });
+  });
+
+  it("expect.updatedInput fails with actualUpdatedInput: undefined when no firing hook emitted it", () => {
+    const caseData = makeCase({ expect: makeExpect({ updatedInput: { a: 1 } }) });
+    const observation = makeObservation({
+      fired: [makeFired({ execOutcome: makeExecOutcome({ stdout: "" }) })],
+    });
+
+    const result = expectFail(assertCase(caseData, observation));
+
+    expect(result.diffs).toContainEqual({
+      field: "updatedInput",
+      expectedUpdatedInput: { a: 1 },
+      actualUpdatedInput: undefined,
+    });
+  });
+
+  it("a case declaring only expect.context is not skipped", () => {
+    const caseData = makeCase({ expect: makeExpect({ context: "anything" }) });
+    const observation = makeObservation({
+      fired: [
+        makeFired({
+          execOutcome: makeExecOutcome({
+            stdout: hookOutputStdout({ additionalContext: "anything" }),
+          }),
+        }),
+      ],
+    });
+
+    const result = assertCase(caseData, observation);
+
+    expect(result.kind).not.toBe("skipped");
+  });
+
+  it("a case declaring only expect.updatedInput is not skipped", () => {
+    const caseData = makeCase({ expect: makeExpect({ updatedInput: { a: 1 } }) });
+    const result = assertCase(caseData, makeObservation());
+
+    expect(result.kind).not.toBe("skipped");
+  });
+
+  it("expect.context is satisfied when only the second of two firing hooks emitted a matching value", () => {
+    const caseData = makeCase({
+      expect: makeExpect({ context: "only in the second hook" }),
+    });
+    const observation = makeObservation({
+      fired: [
+        makeFired({
+          execOutcome: makeExecOutcome({
+            stdout: hookOutputStdout({ additionalContext: "first hook's own context" }),
+          }),
+        }),
+        makeFired({
+          execOutcome: makeExecOutcome({
+            stdout: hookOutputStdout({ additionalContext: "only in the second hook" }),
+          }),
+        }),
+      ],
+    });
+
+    const result = assertCase(caseData, observation);
+
+    expect(result.kind).toBe("pass");
+  });
+
+  it("expect.updatedInput is satisfied when only the second of two firing hooks emitted a matching value", () => {
+    const caseData = makeCase({
+      expect: makeExpect({ updatedInput: { command: "only-in-second" } }),
+    });
+    const observation = makeObservation({
+      fired: [
+        makeFired({
+          execOutcome: makeExecOutcome({
+            stdout: hookOutputStdout({ updatedInput: { command: "first-hook" } }),
+          }),
+        }),
+        makeFired({
+          execOutcome: makeExecOutcome({
+            stdout: hookOutputStdout({ updatedInput: { command: "only-in-second" } }),
+          }),
+        }),
+      ],
+    });
+
+    const result = assertCase(caseData, observation);
 
     expect(result.kind).toBe("pass");
   });

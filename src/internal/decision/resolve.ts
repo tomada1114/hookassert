@@ -87,8 +87,51 @@ function looksLikeJson(text: string): boolean {
   return text.startsWith("{") || text.startsWith("[");
 }
 
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
+/** Whether `value` is a plain JSON object, as opposed to an array, `null`, or a scalar. */
+export function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** What {@link parseJsonStdout} found in a hook's stdout. */
+type StdoutJsonResult =
+  | { readonly kind: "none" }
+  | { readonly kind: "malformed" }
+  | { readonly kind: "record"; readonly value: Record<string, unknown> };
+
+/**
+ * Parse a hook's stdout as JSON, sharing the one rule every stdout-JSON
+ * reader in this package uses for "is this even worth trying": only text
+ * that looks like JSON (`{`/`[`-prefixed after trimming) is attempted at
+ * all — most hooks print plain text and exit, and that is not an error,
+ * since Claude Code itself only tries to parse stdout as JSON when it looks
+ * like one. A value that parses but is not a plain object (an array, a JSON
+ * scalar) reads the same as "no JSON here" (`kind: "none"`), never as a
+ * decision or a hook output.
+ *
+ * @remarks
+ * `classifyJsonDecision` below and `readHookOutput` (`read-output.ts`) both
+ * call this rather than each parsing stdout their own way — the two readers
+ * differ only in what they look for inside the parsed record once they have
+ * one.
+ */
+export function parseJsonStdout(stdout: string): StdoutJsonResult {
+  const trimmed = stdout.trim();
+  if (trimmed.length === 0 || !looksLikeJson(trimmed)) {
+    return { kind: "none" };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed) as unknown;
+  } catch {
+    return { kind: "malformed" };
+  }
+
+  if (!isPlainRecord(parsed)) {
+    return { kind: "none" };
+  }
+
+  return { kind: "record", value: parsed };
 }
 
 /**
@@ -136,23 +179,12 @@ type JsonDecision =
  * looks like one.
  */
 function classifyJsonDecision(eventSpec: EventSpec, stdout: string): JsonDecision {
-  const trimmed = stdout.trim();
-  if (trimmed.length === 0 || !looksLikeJson(trimmed)) {
-    return { kind: "none" };
+  const parsedStdout = parseJsonStdout(stdout);
+  if (parsedStdout.kind === "none" || parsedStdout.kind === "malformed") {
+    return parsedStdout;
   }
 
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(trimmed) as unknown;
-  } catch {
-    return { kind: "malformed" };
-  }
-
-  if (!isPlainRecord(parsed)) {
-    return { kind: "none" };
-  }
-
-  const raw = readDecisionValue(parsed);
+  const raw = readDecisionValue(parsedStdout.value);
   if (raw === undefined) {
     return { kind: "none" };
   }

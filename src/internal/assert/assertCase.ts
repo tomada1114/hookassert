@@ -21,9 +21,47 @@ import type {
   NonFiringExplanation,
   RejectedMatch,
 } from "../../types.js";
-import { combineDecisions } from "../decision/index.js";
+import { combineDecisions, readHookOutput } from "../decision/index.js";
+import type { HookOutput } from "../decision/index.js";
 import type { FixtureCase, FixtureExpectation } from "../fixture/index.js";
 import type { CaseObservation, FiredHook } from "./types.js";
+
+/**
+ * Exact structural equality over JSON-shaped values: same type, same keys
+ * (order-independent), same array length, recursive. No dependency — this is
+ * `expect.context`/`expect.updatedInput`'s comparison rule
+ * (`computeFiredDiffs` below), and a partial/subset match was deliberately
+ * rejected for it: `context` is a string in practice, where "subset" has no
+ * meaning, and a subset rule for `updatedInput` would make
+ * `expect.updatedInput: {}` pass against anything.
+ */
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) {
+    return true;
+  }
+
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) {
+      return false;
+    }
+    return a.every((item, index) => deepEqual(item, b[index]));
+  }
+
+  if (typeof a === "object" && a !== null && typeof b === "object" && b !== null) {
+    const aRecord = a as Record<string, unknown>;
+    const bRecord = b as Record<string, unknown>;
+    const aKeys = Object.keys(aRecord);
+    const bKeys = Object.keys(bRecord);
+    if (aKeys.length !== bKeys.length) {
+      return false;
+    }
+    return aKeys.every(
+      (key) => Object.hasOwn(bRecord, key) && deepEqual(aRecord[key], bRecord[key]),
+    );
+  }
+
+  return false;
+}
 
 /** Whether `expect` declares no assertion at all — every field is `undefined`. */
 function isEmptyExpectation(expect: FixtureExpectation): boolean {
@@ -94,9 +132,13 @@ function deriveNonFiring(
  * "unknown"` rather than a `diffs` mismatch. `decision`/`exitCode` are
  * compared against the combined verdict (`exitCode` is the deciding hook's
  * own, since that is whose `Decision` won the fold); `stdoutContains`,
- * `stderrContains`, and `timedOut` are checked against *every* firing hook
- * — a real Claude Code session shows every hook's output, not only the one
- * that decided — so any one of them satisfying the expectation is enough.
+ * `stderrContains`, `timedOut`, `context`, and `updatedInput` are checked
+ * against *every* firing hook — a real Claude Code session shows every
+ * hook's output, not only the one that decided — so any one of them
+ * satisfying the expectation is enough. `context`/`updatedInput` compare
+ * `hookSpecificOutput.additionalContext`/`hookSpecificOutput.updatedInput`
+ * (read by `decision/`'s `readHookOutput`) by exact `deepEqual`, never a
+ * partial match.
  */
 function computeFiredDiffs(
   expect: FixtureExpectation,
@@ -160,7 +202,44 @@ function computeFiredDiffs(
     }
   }
 
+  if (expect.context !== undefined || expect.updatedInput !== undefined) {
+    const outputs = fired.map((f) => readHookOutput(f.execOutcome));
+
+    if (expect.context !== undefined) {
+      const expectedContext = expect.context;
+      if (!outputs.some((o) => deepEqual(o.additionalContext, expectedContext))) {
+        diffs.push({
+          field: "context",
+          expectedContext,
+          actualContext: firstEmitted(outputs, "additionalContext"),
+        });
+      }
+    }
+
+    if (expect.updatedInput !== undefined) {
+      const expectedUpdatedInput = expect.updatedInput;
+      if (!outputs.some((o) => deepEqual(o.updatedInput, expectedUpdatedInput))) {
+        diffs.push({
+          field: "updatedInput",
+          expectedUpdatedInput,
+          actualUpdatedInput: firstEmitted(outputs, "updatedInput"),
+        });
+      }
+    }
+  }
+
   return diffs;
+}
+
+/**
+ * `outputs[*][key]` from the first `HookOutput` that emitted it, or
+ * `undefined` when none did — the `actualContext`/`actualUpdatedInput` a
+ * `"context"`/`"updatedInput"` {@link ExpectationDiff} reports, independent
+ * of which firing hook (if any) is what {@link computeFiredDiffs} actually
+ * compared `expect.context`/`expect.updatedInput` against.
+ */
+function firstEmitted(outputs: readonly HookOutput[], key: keyof HookOutput): unknown {
+  return outputs.find((o) => o[key] !== undefined)?.[key];
 }
 
 /** Type guard narrowing `fired` to a non-empty tuple once its length has been checked. */
@@ -193,9 +272,9 @@ function isNonEmptyFired(
  * 5. The combined `Decision` resolved with confidence → every declared
  *    `expect` field is compared against what was observed (`decision`/
  *    `exitCode` against the combined verdict, `stdoutContains`/
- *    `stderrContains`/`timedOut` against every firing hook's own stream);
- *    any mismatch produces `"fail"` with a non-empty `diffs`, otherwise
- *    `"pass"`.
+ *    `stderrContains`/`timedOut`/`context`/`updatedInput` against every
+ *    firing hook's own stream); any mismatch produces `"fail"` with a
+ *    non-empty `diffs`, otherwise `"pass"`.
  */
 export function assertCase(
   caseData: FixtureCase,

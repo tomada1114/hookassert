@@ -709,6 +709,8 @@ class ScriptedSpawner implements Spawner {
 /** The loosely typed shape this suite reads back out of `renderTestJson`'s output. */
 interface JsonExpectationDiffShape {
   readonly field: string;
+  readonly actualContext?: unknown;
+  readonly actualUpdatedInput?: unknown;
 }
 interface JsonNonFiringExplanationShape {
   readonly kind: string;
@@ -756,6 +758,8 @@ describe("renderTestJson: schema validation against a real rendering", () => {
   const CMD_NOTIFICATION_NOOP = "cmd-notification-noop";
   const CMD_STOP_LOCAL_ONLY = "cmd-stop-local-only";
   const CMD_LAUNCH_FAIL = "cmd-launch-fail";
+  const CMD_CONTEXT_MISMATCH = "cmd-context-mismatch";
+  const CMD_UPDATED_INPUT_ABSENT = "cmd-updated-input-absent";
 
   beforeAll(() => {
     projectDir = mkdtempSync(path.join(tmpdir(), "hookassert-reporters-test-schema-"));
@@ -778,6 +782,9 @@ describe("renderTestJson: schema validation against a real rendering", () => {
             matcher: "LaunchFail",
             hooks: [{ type: "command", command: CMD_LAUNCH_FAIL, args: [] }],
           },
+          // Issue #34: expect.context / expect.updatedInput diffs.
+          commandGroup("Agent", CMD_CONTEXT_MISMATCH),
+          commandGroup("AskUserQuestion", CMD_UPDATED_INPUT_ABSENT),
         ],
         Notification: [commandGroup(undefined, CMD_NOTIFICATION_NOOP)],
       },
@@ -840,8 +847,22 @@ describe("renderTestJson: schema validation against a real rendering", () => {
           tool: "WebFetch",
           expect: { timedOut: false },
         },
-        // "fail" via NonFiringExplanation.kind: "matcher-did-not-match" — six
-        // candidates are declared under PreToolUse, none matches "Read".
+        // "fail" via field: "context" (issue #34) — hookSpecificOutput.additionalContext
+        // disagrees with expect.context.
+        {
+          event: "PreToolUse",
+          tool: "Agent",
+          expect: { context: "expected-context" },
+        },
+        // "fail" via field: "updatedInput" (issue #34), actualUpdatedInput
+        // undefined — the hook's stdout is not JSON, so nothing was emitted.
+        {
+          event: "PreToolUse",
+          tool: "AskUserQuestion",
+          expect: { updatedInput: { command: "git push" } },
+        },
+        // "fail" via NonFiringExplanation.kind: "matcher-did-not-match" —
+        // several candidates are declared under PreToolUse, none matches "Read".
         { event: "PreToolUse", tool: "Read", expect: { fires: true } },
         // "fail" via NonFiringExplanation.kind: "no-hook-configured" —
         // nothing is declared under SessionStart anywhere.
@@ -888,6 +909,16 @@ describe("renderTestJson: schema validation against a real rendering", () => {
           CMD_LAUNCH_FAIL,
           { exitCode: -1, launchError: "spawn cmd-launch-fail ENOENT" },
         ],
+        [
+          CMD_CONTEXT_MISMATCH,
+          {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              hookSpecificOutput: { additionalContext: "actual-context" },
+            }),
+          },
+        ],
+        [CMD_UPDATED_INPUT_ABSENT, { exitCode: 0, stdout: "not json" }],
       ]),
     );
 
@@ -903,7 +934,7 @@ describe("renderTestJson: schema validation against a real rendering", () => {
       },
     );
 
-    // 9 of the 14 cases fail — `resolveTestExitCode` returns 1 whenever
+    // 11 of the 16 cases fail — `resolveTestExitCode` returns 1 whenever
     // `summary.failed > 0`, regardless of `--ci`.
     expect(result.exitCode).toBe(1);
     const parsed: unknown = JSON.parse(result.stdout);
@@ -926,6 +957,8 @@ describe("renderTestJson: schema validation against a real rendering", () => {
         "stdoutContains",
         "stderrContains",
         "timedOut",
+        "context",
+        "updatedInput",
       ]),
     );
 
@@ -956,6 +989,25 @@ describe("renderTestJson: schema validation against a real rendering", () => {
     );
     expect(decisionDiffCase?.result.nonFiring).toBeNull();
 
+    // Issue #34: expect.context compares against hookSpecificOutput.additionalContext.
+    const contextDiffCase = report.cases.find(
+      (c) => c.event === "PreToolUse" && c.tool === "Agent",
+    );
+    expect(contextDiffCase?.result.diffs).toContainEqual(
+      expect.objectContaining({ field: "context", actualContext: "actual-context" }),
+    );
+
+    // Issue #34: expect.updatedInput compares against hookSpecificOutput.updatedInput —
+    // no hook emitted it here (non-JSON stdout), so actualUpdatedInput is the
+    // explicit JSON `null` schema/test-report.schema.json requires, never an
+    // absent key.
+    const updatedInputDiffCase = report.cases.find(
+      (c) => c.event === "PreToolUse" && c.tool === "AskUserQuestion",
+    );
+    expect(updatedInputDiffCase?.result.diffs).toContainEqual(
+      expect.objectContaining({ field: "updatedInput", actualUpdatedInput: null }),
+    );
+
     // Issue #39: a launch failure resolves to a "pass" CaseResult when the
     // fixture expects decision: "error", and decidedBy.launchError carries
     // the OS-reported reason through to the JSON report.
@@ -965,6 +1017,85 @@ describe("renderTestJson: schema validation against a real rendering", () => {
     expect(launchFailedCase?.result.kind).toBe("pass");
     expect(launchFailedCase?.result.decidedBy?.launchError).toBe(
       "spawn cmd-launch-fail ENOENT",
+    );
+  });
+
+  it("pretty and github both render the context and updatedInput diffs (issue #34)", async () => {
+    const fixture = {
+      settings: [".claude/settings.json"],
+      cases: [
+        { event: "PreToolUse", tool: "Agent", expect: { context: "expected-context" } },
+        {
+          event: "PreToolUse",
+          tool: "AskUserQuestion",
+          expect: { updatedInput: { command: "git push" } },
+        },
+      ],
+    };
+    const fixturePath = path.join(projectDir, "context-diff.yaml");
+    writeFileSync(fixturePath, JSON.stringify(fixture, null, 2));
+
+    const spawner = new ScriptedSpawner(
+      new Map<string, ScriptedOutcome>([
+        [
+          CMD_CONTEXT_MISMATCH,
+          {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              hookSpecificOutput: { additionalContext: "actual-context" },
+            }),
+          },
+        ],
+        [CMD_UPDATED_INPUT_ABSENT, { exitCode: 0, stdout: "not json" }],
+      ]),
+    );
+
+    const deps = {
+      cwd: projectDir,
+      home: path.join(FIXTURES_DIR, "no-such-directory"),
+      env: {},
+      specPath: MINIMAL_SPEC_PATH,
+      spawner,
+    };
+
+    const prettyResult = await runCli(
+      [
+        "test",
+        fixturePath,
+        "--claude-version",
+        "2.1.300",
+        "--yes",
+        "--format",
+        "pretty",
+      ],
+      "hookassert",
+      deps,
+    );
+    expect(prettyResult.stdout).toContain(
+      'context: expected "expected-context", got "actual-context"',
+    );
+    expect(prettyResult.stdout).toContain(
+      'updatedInput: expected {"command":"git push"}, got absent',
+    );
+
+    const githubResult = await runCli(
+      [
+        "test",
+        fixturePath,
+        "--claude-version",
+        "2.1.300",
+        "--yes",
+        "--format",
+        "github",
+      ],
+      "hookassert",
+      deps,
+    );
+    expect(githubResult.stdout).toContain(
+      'context: expected "expected-context", got "actual-context"',
+    );
+    expect(githubResult.stdout).toContain(
+      'updatedInput: expected {"command":"git push"}, got absent',
     );
   });
 });
