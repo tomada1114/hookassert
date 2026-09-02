@@ -341,7 +341,10 @@ describe("Decision", () => {
             readonly kind: "error";
             readonly exitCode: number;
             readonly cause:
-              "nonzero-exit-without-json" | "invalid-json" | "schema-violation";
+              | "nonzero-exit-without-json"
+              | "invalid-json"
+              | "schema-violation"
+              | "launch-failed";
           }>();
           break;
         }
@@ -358,6 +361,7 @@ describe("Decision", () => {
     narrow({ kind: "allow", exitCode: 0 });
     narrow({ kind: "pass", exitCode: 1 });
     narrow({ kind: "error", exitCode: 127, cause: "nonzero-exit-without-json" });
+    narrow({ kind: "error", exitCode: -1, cause: "launch-failed" });
     narrow({
       kind: "unknown",
       reasons: [{ kind: "plugin-hooks-present", files: [] }],
@@ -392,12 +396,13 @@ describe("Decision", () => {
 });
 
 describe("ExecOutcome", () => {
-  it("requires exitCode, stdout, stderr, timedOut with no optional fields", () => {
+  it("requires exitCode, stdout, stderr, timedOut, launchError with no optional fields", () => {
     expectTypeOf<ExecOutcome>().toEqualTypeOf<{
       readonly exitCode: number;
       readonly stdout: string;
       readonly stderr: string;
       readonly timedOut: boolean;
+      readonly launchError: string | undefined;
     }>();
     expectTypeOf<Required<ExecOutcome>>().toEqualTypeOf<ExecOutcome>();
   });
@@ -405,10 +410,40 @@ describe("ExecOutcome", () => {
   it("rejects an outcome missing timedOut", () => {
     const rejected = (): void => {
       // @ts-expect-error every field is required, including timedOut
-      const outcome: ExecOutcome = { exitCode: 0, stdout: "", stderr: "" };
+      const outcome: ExecOutcome = {
+        exitCode: 0,
+        stdout: "",
+        stderr: "",
+        launchError: undefined,
+      };
       void outcome;
     };
     expect(rejected).toBeTypeOf("function");
+  });
+
+  it("rejects an outcome missing launchError, even though it may hold undefined", () => {
+    const rejected = (): void => {
+      // @ts-expect-error launchError is `string | undefined`, not optional — omitting the key is not the same as writing `undefined`
+      const outcome: ExecOutcome = {
+        exitCode: 0,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+      };
+      void outcome;
+    };
+    expect(rejected).toBeTypeOf("function");
+  });
+
+  it("accepts launchError set explicitly to a string", () => {
+    const outcome: ExecOutcome = {
+      exitCode: -1,
+      stdout: "",
+      stderr: "",
+      timedOut: false,
+      launchError: "spawn pyton3 ENOENT",
+    };
+    expectTypeOf(outcome.launchError).toEqualTypeOf<string | undefined>();
   });
 });
 
@@ -462,14 +497,40 @@ const hook: ResolvedHook = {
 };
 
 /** A complete `DecidingHook`, reused by the `CaseResult` cases below. */
-const decidingHook: DecidingHook = { hook, decision: { kind: "pass", exitCode: 0 } };
+const decidingHook: DecidingHook = {
+  hook,
+  decision: { kind: "pass", exitCode: 0 },
+  launchError: undefined,
+};
 
 describe("DecidingHook", () => {
-  it("carries the deciding hook and the Decision it produced", () => {
+  it("carries the deciding hook, the Decision it produced, and its own launchError", () => {
     expectTypeOf(decidingHook).toEqualTypeOf<{
       readonly hook: ResolvedHook;
       readonly decision: Decision;
+      readonly launchError: string | undefined;
     }>();
+  });
+
+  it("rejects a DecidingHook missing launchError", () => {
+    const rejected = (): void => {
+      // @ts-expect-error launchError is `string | undefined`, not optional
+      const missingLaunchError: DecidingHook = {
+        hook,
+        decision: { kind: "pass", exitCode: 0 },
+      };
+      void missingLaunchError;
+    };
+    expect(rejected).toBeTypeOf("function");
+  });
+
+  it("accepts launchError set to the OS-reported reason", () => {
+    const launchFailed: DecidingHook = {
+      hook,
+      decision: { kind: "error", exitCode: -1, cause: "launch-failed" },
+      launchError: "spawn pyton3 ENOENT",
+    };
+    expectTypeOf(launchFailed.launchError).toEqualTypeOf<string | undefined>();
   });
 });
 

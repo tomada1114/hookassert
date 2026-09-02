@@ -34,7 +34,8 @@ export function passed(exitCode: number): Decision {
 /** The outcome could not be turned into a decision at all. */
 export function errored(
   exitCode: number,
-  cause: "nonzero-exit-without-json" | "invalid-json" | "schema-violation",
+  cause:
+    "nonzero-exit-without-json" | "invalid-json" | "schema-violation" | "launch-failed",
 ): Decision {
   return { kind: "error", exitCode, cause };
 }

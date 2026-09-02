@@ -346,7 +346,13 @@ function buildSpawnRequest(
 
 /** Build the `ExecOutcome` a stubbed step resolves to, without spawning anything. */
 function stubbedOutcome(stub: FixtureStubEntry): ExecOutcome {
-  return { exitCode: stub.exitCode, stdout: "", stderr: "", timedOut: false };
+  return {
+    exitCode: stub.exitCode,
+    stdout: "",
+    stderr: "",
+    timedOut: false,
+    launchError: undefined,
+  };
 }
 
 /** One executed step paired with the `ExecOutcome` it produced. */

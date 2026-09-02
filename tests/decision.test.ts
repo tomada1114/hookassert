@@ -26,7 +26,14 @@ const REAL_SPEC_PATH = path.join(REPO_ROOT, "spec", "claude-code-2.1.251-2.2.0.j
 const spec = loadSpecFile(REAL_SPEC_PATH);
 
 function makeOutcome(overrides: Partial<ExecOutcome> = {}): ExecOutcome {
-  return { exitCode: 0, stdout: "", stderr: "", timedOut: false, ...overrides };
+  return {
+    exitCode: 0,
+    stdout: "",
+    stderr: "",
+    timedOut: false,
+    launchError: undefined,
+    ...overrides,
+  };
 }
 
 /** `spec` with `event`'s own entry removed entirely, for the "spec/EventName drift" cases. */
@@ -195,6 +202,57 @@ describe("a timed-out PreToolUse hook does not resolve to deny", () => {
       makeOutcome({ exitCode: 2, timedOut: true }),
     );
     expect(decision.kind).not.toBe("deny");
+    expect(decision.kind).toBe("pass");
+  });
+});
+
+describe("a launch failure (issue #39) resolves to error/launch-failed before anything else", () => {
+  it("outcome.launchError set resolves to error/launch-failed", () => {
+    const decision = resolveDecision(
+      spec,
+      "PreToolUse",
+      makeOutcome({ exitCode: -1, launchError: "spawn pyton3 ENOENT" }),
+    );
+    expect(decision.kind).toBe("error");
+    if (decision.kind === "error") {
+      expect(decision.cause).toBe("launch-failed");
+      expect(decision.exitCode).toBe(-1);
+    }
+  });
+
+  it("launch failure outranks a documented block exit code: launchError wins even when exitCode also matches a block row", () => {
+    // exitCode 2 is PreToolUse's own documented block effect — proof that
+    // `resolveDecision` checks `launchError` before any `exitCodeEffects`
+    // lookup, per this issue's design, rather than the exit code winning.
+    const decision = resolveDecision(
+      spec,
+      "PreToolUse",
+      makeOutcome({ exitCode: 2, launchError: "spawn pyton3 ENOENT" }),
+    );
+    expect(decision.kind).toBe("error");
+    if (decision.kind === "error") {
+      expect(decision.cause).toBe("launch-failed");
+    }
+  });
+
+  it("launch failure outranks the timeout check: launchError wins even when timedOut is also true", () => {
+    const decision = resolveDecision(
+      spec,
+      "PreToolUse",
+      makeOutcome({ exitCode: -1, timedOut: true, launchError: "spawn pyton3 ENOENT" }),
+    );
+    expect(decision.kind).toBe("error");
+    if (decision.kind === "error") {
+      expect(decision.cause).toBe("launch-failed");
+    }
+  });
+
+  it("a timed-out hook with no launchError still resolves to pass, never launch-failed", () => {
+    const decision = resolveDecision(
+      spec,
+      "PreToolUse",
+      makeOutcome({ exitCode: -1, timedOut: true }),
+    );
     expect(decision.kind).toBe("pass");
   });
 });
@@ -530,6 +588,14 @@ describe("factory functions build exactly the Decision shape they name", () => {
       kind: "error",
       exitCode: 127,
       cause: "nonzero-exit-without-json",
+    });
+  });
+
+  it("errored accepts launch-failed as a cause", () => {
+    expect(errored(-1, "launch-failed")).toEqual({
+      kind: "error",
+      exitCode: -1,
+      cause: "launch-failed",
     });
   });
 });

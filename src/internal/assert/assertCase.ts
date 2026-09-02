@@ -235,8 +235,12 @@ export function assertCase(
   // noUncheckedIndexedAccess; `fired[0]` is the unreachable-in-practice
   // fallback, itself guaranteed present by the tuple type `fired` narrowed
   // to above.
-  const decidingHook = (fired[combined.index] ?? fired[0]).hook;
-  const decidedBy: DecidingHook = { hook: decidingHook, decision: combined.decision };
+  const decidingHookEntry = fired[combined.index] ?? fired[0];
+  const decidedBy: DecidingHook = {
+    hook: decidingHookEntry.hook,
+    decision: combined.decision,
+    launchError: decidingHookEntry.execOutcome.launchError,
+  };
 
   if (combined.decision.kind === "unknown") {
     return { kind: "unknown", origin, reasons: combined.decision.reasons, decidedBy };

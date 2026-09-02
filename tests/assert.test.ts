@@ -70,7 +70,14 @@ function makeCase(overrides: Partial<FixtureCase> = {}): FixtureCase {
 }
 
 function makeExecOutcome(overrides: Partial<ExecOutcome> = {}): ExecOutcome {
-  return { exitCode: 0, stdout: "", stderr: "", timedOut: false, ...overrides };
+  return {
+    exitCode: 0,
+    stdout: "",
+    stderr: "",
+    timedOut: false,
+    launchError: undefined,
+    ...overrides,
+  };
 }
 
 function makeFired(overrides: Partial<FiredHook> = {}): FiredHook {
@@ -359,6 +366,36 @@ describe("assertCase: multiple firing hooks", () => {
     const result = expectPass(assertCase(caseData, observation));
 
     expect(result.decidedBy?.hook).toBe(hook);
+  });
+
+  it("decidedBy carries undefined launchError when the deciding hook's own ExecOutcome carries none", () => {
+    const caseData = makeCase();
+    const observation = makeObservation({
+      fired: [makeFired({ execOutcome: makeExecOutcome({ launchError: undefined }) })],
+    });
+
+    const result = expectPass(assertCase(caseData, observation));
+
+    expect(result.decidedBy?.launchError).toBeUndefined();
+  });
+
+  it("decidedBy carries the deciding hook's own launchError (issue #39)", () => {
+    const caseData = makeCase({ expect: makeExpect({ decision: "error" }) });
+    const observation = makeObservation({
+      fired: [
+        makeFired({
+          decision: { kind: "error", exitCode: -1, cause: "launch-failed" },
+          execOutcome: makeExecOutcome({
+            exitCode: -1,
+            launchError: "spawn pyton3 ENOENT",
+          }),
+        }),
+      ],
+    });
+
+    const result = expectPass(assertCase(caseData, observation));
+
+    expect(result.decidedBy?.launchError).toBe("spawn pyton3 ENOENT");
   });
 });
 

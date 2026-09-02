@@ -137,18 +137,53 @@ function describeDecidedBy(decidedBy: DecidingHook): string {
 }
 
 /**
+ * `hook never launched: <OS message> (command "<command>", <file>:<line>)` —
+ * the message every reporter shows for a case whose deciding hook's process
+ * never started at all (`DecidingHook.launchError` set). Already names the
+ * hook and its declaration site, so callers never also append
+ * {@link decidedBySuffix}'s "— decided by …" for the same `DecidingHook`.
+ */
+function describeLaunchFailure(
+  decidedBy: DecidingHook & { launchError: string },
+): string {
+  const { hook, launchError } = decidedBy;
+  return `hook never launched: ${launchError} (command "${hook.command}", ${hook.provenance.file}:${String(hook.provenance.line)})`;
+}
+
+/**
  * ` — decided by …` suffix for a `FAIL`/`UNKNOWN` line, shown only when more
  * than one hook fired for the case — naming the hook for a single-hook case
- * would just repeat what the line already says.
+ * would just repeat what the line already says. Never shown when the
+ * deciding hook's own `launchError` is set: {@link describeLaunchFailure}
+ * already names the hook and its location.
  */
 function decidedBySuffix(
   report: TestCaseReport,
   decidedBy: DecidingHook | undefined,
 ): string {
-  if (decidedBy === undefined || report.firedCount <= 1) {
+  if (
+    decidedBy === undefined ||
+    report.firedCount <= 1 ||
+    decidedBy.launchError !== undefined
+  ) {
     return "";
   }
   return ` — decided by ${describeDecidedBy(decidedBy)}`;
+}
+
+/**
+ * The detail text after a `FAIL` line's label, for a case whose combined
+ * verdict is a `"fail"`: the launch-failure message when the deciding hook
+ * never launched, otherwise the ordinary diff/non-firing explanation.
+ */
+function describeFailDetail(result: Extract<CaseResult, { kind: "fail" }>): string {
+  const { decidedBy } = result;
+  if (decidedBy?.launchError !== undefined) {
+    return describeLaunchFailure({ ...decidedBy, launchError: decidedBy.launchError });
+  }
+  return result.nonFiring === undefined
+    ? result.diffs.map(describeDiff).join("; ")
+    : describeNonFiring(result.nonFiring);
 }
 
 /** One human-readable line per {@link TestCaseReport}, for `renderTestPretty`. */
@@ -165,10 +200,7 @@ function renderCaseLine(report: TestCaseReport): string {
       return `UNKNOWN ${label} — ${reasons}${decidedBySuffix(report, result.decidedBy)}`;
     }
     case "fail": {
-      const detail =
-        result.nonFiring === undefined
-          ? result.diffs.map(describeDiff).join("; ")
-          : describeNonFiring(result.nonFiring);
+      const detail = describeFailDetail(result);
       return `FAIL  ${label} — ${detail}${decidedBySuffix(report, result.decidedBy)}`;
     }
   }
@@ -249,11 +281,16 @@ function toJsonPayloadOrigin(origin: PayloadOrigin): JsonPayloadOrigin {
 interface JsonDecidingHook {
   readonly hook: JsonHook;
   readonly decision: Decision;
+  readonly launchError: string | null;
 }
 
 /** Build the {@link JsonDecidingHook} for one {@link DecidingHook}. */
 function toJsonDecidingHook(decidedBy: DecidingHook): JsonDecidingHook {
-  return { hook: toJsonHook(decidedBy.hook), decision: decidedBy.decision };
+  return {
+    hook: toJsonHook(decidedBy.hook),
+    decision: decidedBy.decision,
+    launchError: decidedBy.launchError ?? null,
+  };
 }
 
 /** `CaseResult`'s `decidedBy`, converted and `undefined` normalized to `null`. */
@@ -466,10 +503,7 @@ export function renderTestGithub(report: TestReport, workspaceRoot: string): str
       continue;
     }
     const { result } = caseReport;
-    const detail =
-      result.nonFiring === undefined
-        ? result.diffs.map(describeDiff).join("; ")
-        : describeNonFiring(result.nonFiring);
+    const detail = describeFailDetail(result);
     const { decidedBy } = result;
     const attachable =
       decidedBy !== undefined &&
@@ -480,8 +514,12 @@ export function renderTestGithub(report: TestReport, workspaceRoot: string): str
           line: decidedBy.hook.provenance.line,
         }
       : { file: caseReport.file, line: 1 };
+    // Never appends "— decided by …" when the hook never launched: `detail`
+    // already names the hook and its declaration site (see
+    // `describeLaunchFailure`), so the annotation would otherwise repeat
+    // itself.
     const message =
-      decidedBy === undefined || attachable
+      decidedBy === undefined || attachable || decidedBy.launchError !== undefined
         ? detail
         : `${detail} — decided by ${describeDecidedBy(decidedBy)}`;
     lines.push(

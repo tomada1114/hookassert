@@ -50,7 +50,13 @@ class CountingSpawner implements Spawner {
 
   spawn(req: SpawnRequest): Promise<ExecOutcome> {
     this.calls.push(req);
-    return Promise.resolve({ exitCode: 0, stdout: "", stderr: "", timedOut: false });
+    return Promise.resolve({
+      exitCode: 0,
+      stdout: "",
+      stderr: "",
+      timedOut: false,
+      launchError: undefined,
+    });
   }
 }
 

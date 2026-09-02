@@ -124,7 +124,12 @@
             "exitCode": { "type": "number" },
             "cause": {
               "type": "string",
-              "enum": ["nonzero-exit-without-json", "invalid-json", "schema-violation"]
+              "enum": [
+                "nonzero-exit-without-json",
+                "invalid-json",
+                "schema-violation",
+                "launch-failed"
+              ]
             }
           }
         },
@@ -145,10 +150,11 @@
     "decidingHook": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["hook", "decision"],
+      "required": ["hook", "decision", "launchError"],
       "properties": {
         "hook": { "$ref": "#/$defs/hook" },
-        "decision": { "$ref": "#/$defs/decision" }
+        "decision": { "$ref": "#/$defs/decision" },
+        "launchError": { "type": ["string", "null"] }
       }
     },
     "unknownReason": {
