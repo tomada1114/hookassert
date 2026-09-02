@@ -180,6 +180,24 @@ function requireNumber(
   return node.value;
 }
 
+/** A {@link requireNumber} that also rejects zero, negative, and non-finite values. */
+function requirePositiveNumber(
+  node: Node,
+  source: SettingsSource,
+  text: string,
+  description: string,
+): number {
+  const value = requireNumber(node, source, description);
+  if (!Number.isFinite(value) || value <= 0) {
+    const { line } = positionAt(text, node.offset);
+    fail(
+      source,
+      `${description} at line ${String(line)} must be a positive number of seconds, got ${String(value)}`,
+    );
+  }
+  return value;
+}
+
 function readStringArray(
   node: Node,
   source: SettingsSource,
@@ -225,12 +243,20 @@ function readCommandHooks(
 
     const timeoutNode = getProperty(hookNode, "timeout");
     // Claude Code's own settings schema writes `timeout` in seconds;
-    // ResolvedHook.timeoutMs is documented in milliseconds.
+    // ResolvedHook.timeoutMs is documented in milliseconds. `timeout` must be
+    // finite and > 0 — Claude Code documents no semantics for zero or
+    // negative, and either would multiply out to an instant timeout with no
+    // hint the settings file is the cause. Fractional seconds still convert
+    // as-is: `0.5` yields `timeoutMs: 500`.
     const timeoutMs =
       timeoutNode === undefined
         ? undefined
-        : requireNumber(timeoutNode, source, `"hooks.${event}[].hooks[].timeout"`) *
-          1000;
+        : requirePositiveNumber(
+            timeoutNode,
+            source,
+            text,
+            `"hooks.${event}[].hooks[].timeout"`,
+          ) * 1000;
 
     return {
       event,

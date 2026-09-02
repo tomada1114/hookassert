@@ -498,6 +498,34 @@ describe("loadSettings: individual field validation", () => {
     expect(hook?.timeoutMs).toBe(30_000);
   });
 
+  it("accepts a fractional timeout, converting seconds to milliseconds exactly as today", () => {
+    const settings = loadSettings([
+      source("fractional-timeout", "project.json", "project"),
+    ]);
+
+    expect(settings.hooks).toHaveLength(1);
+    expect(settings.hooks[0]?.timeoutMs).toBe(500);
+  });
+
+  it.each(["negative-timeout", "zero-timeout"] as const)(
+    "rejects a non-positive timeout with a reason naming the line: %s",
+    (caseName) => {
+      let caught: unknown;
+      try {
+        loadSettings([source("structural-errors", `${caseName}.json`, "project")]);
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(SettingsParseError);
+      expect((caught as SettingsParseError).code).toBe("ERR_SETTINGS_PARSE");
+      expect((caught as SettingsParseError).exitCode).toBe(5);
+      expect((caught as Error).message).toMatch(/line \d+/);
+      expect((caught as Error).message).toContain(
+        "must be a positive number of seconds, got",
+      );
+    },
+  );
+
   it("treats a missing settings file as contributing zero hooks", () => {
     const settings = loadSettings([
       { path: fixturePath("project-only", "does-not-exist.json"), layer: "project" },
