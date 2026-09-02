@@ -67,7 +67,10 @@ const DYNAMIC_LAYER_SPECIFIERS = DYNAMIC_LAYER.flatMap((directory) => [
 
 /** What `src/internal/**` is, in the words of the rule that made it private. */
 const INTERNAL_IS_PRIVATE =
-  'src/internal/ is private: see "Architecture" in AGENTS.md. Tests reach it through the public surface in src/index.ts (see the `writing-tests` skill), and repository automation must not depend on package internals at all.';
+  'src/internal/ is private: see "Architecture" in AGENTS.md. Repository automation is a consumer and must reach the package through src/index.ts, never through package internals.';
+
+const INTERNAL_INDEX_ONLY =
+  "A test reaches an internal module through its own index: import src/internal/<dir>/index.js (or src/internal/errors.js), never a file beneath it. A symbol that is not on the module's index is one the module has not decided to expose, and a test must not decide for it. See the `writing-tests` skill. dist/internal/ is never importable from a test: a test reads source, not build output.";
 
 /**
  * Read one property off a value of unknown shape.
@@ -321,8 +324,12 @@ export default defineConfig([
     },
   },
   {
+    // Repository automation is a consumer, and a consumer goes through
+    // `src/index.ts`. Nothing under either internal tree is importable here,
+    // unconditionally — `scripts/**` gets no equivalent of the tests/**
+    // index exception below.
     name: "boundaries/internal-is-not-importable",
-    files: ["tests/**/*.ts", "scripts/**/*.mjs"],
+    files: ["scripts/**/*.mjs"],
     rules: {
       "no-restricted-imports": [
         "error",
@@ -346,48 +353,54 @@ export default defineConfig([
     },
   },
   {
-    // `boundaries/internal-is-not-importable`'s own message says a test
-    // "reaches [src/internal/] through the public surface in src/index.ts" —
-    // true once a static-layer module is wired into the CLI, but every
-    // static module (settings, spec, matcher, fixture, decision, assert,
-    // lint, report) is built and TDD'd in its own issue *before* the
-    // cli-explain issue that wires it up, and `src/index.ts` can never
-    // re-export anything under `./internal/` at all (see
-    // `public-api/internal-stays-private` above) — there is no public
-    // surface for these modules to reach through yet, and never will be one
-    // for their internal types. Without this narrow exception a static
-    // module's own dedicated unit test could not import it, and `src/**`'s
-    // coverage floor (see `vitest.config.ts`) would fail on every line the
-    // untested module added, for as long as that module has no consumer.
+    // A test is not a consumer. Every static-layer module is built and TDD'd
+    // in its own issue *before* the CLI issue that wires it up, and
+    // `src/index.ts` can never re-export anything under `./internal/` at all
+    // (see `public-api/internal-stays-private` above) — so there is no public
+    // surface for these modules to be tested through, and never will be one
+    // for their internal types.
     //
-    // This is deliberately an explicit per-file allowlist, the same shape as
-    // `vitest.config.ts`'s `automationTests` list, rather than a directory
-    // glob: each static module's own test file is added here individually,
-    // by name, when it is created — never a blanket carve-out for
-    // `tests/**/*.ts`, and never for `scripts/**/*.mjs`, which
-    // `boundaries/internal-is-not-importable` continues to cover in full.
-    // `boundaries.test.ts` asserts the general rule is still registered and
-    // still reaches every static directory; nothing here narrows that
-    // assertion, only what a handful of named files may additionally do.
-    name: "tests/static-layer-unit-tests",
-    files: [
-      "tests/settings.test.ts",
-      "tests/spec.test.ts",
-      "tests/decision.test.ts",
-      "tests/executor.test.ts",
-      "tests/matcher.test.ts",
-      "tests/cli.test.ts",
-      "tests/report.test.ts",
-      "tests/reporters.test.ts",
-      "tests/fixture.test.ts",
-      "tests/assert.test.ts",
-      "tests/test-cmd.test.ts",
-      "tests/lint.test.ts",
-      "tests/record.test.ts",
-      "tests/troubleshooting-map.test.ts",
-    ],
+    // The boundary that is real here is not "internal is unreachable" but
+    // "internal is reachable only where the module says so": a module's own
+    // `index.ts` is its test surface, and a test that reaches past it into
+    // `exec/spawner.js` or `settings/edit.js` is depending on a shape the
+    // module never published. That is what the negations below express, and
+    // it is why this replaced a per-file allowlist that had grown to name
+    // every test file it applied to (#24) — a rule switched off everywhere it
+    // would fire is a ritual, not a boundary.
+    name: "boundaries/tests-reach-internal-through-its-index",
+    files: ["tests/**/*.ts"],
     rules: {
-      "no-restricted-imports": "off",
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              // Gitignore-style negation: forbid the whole internal tree, then
+              // carve back the two spellings a test may name — a module
+              // directory's own index, and the shared error vocabulary, which
+              // is a bare module with no directory of its own.
+              group: [
+                // No bare "**/src/internal" here, unlike the scripts zone:
+                // gitignore semantics cannot re-include a path below an
+                // excluded *directory*, so listing the directory itself would
+                // silently defeat both negations below and forbid even a
+                // module index. There is no `src/internal/index.ts` for a bare
+                // specifier to resolve to anyway.
+                "**/src/internal/**",
+                "!**/src/internal/*",
+                "**/src/internal/*.js",
+                "!**/src/internal/errors.js",
+                "**/src/internal/*/**",
+                "!**/src/internal/*/index.js",
+                "**/dist/internal",
+                "**/dist/internal/**",
+              ],
+              message: INTERNAL_INDEX_ONLY,
+            },
+          ],
+        },
+      ],
     },
   },
   {

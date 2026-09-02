@@ -9,13 +9,6 @@ import { loadSpecFile, parseClaudeVersion } from "../src/internal/spec/index.js"
 import type { Spec } from "../src/internal/spec/index.js";
 import type { EventName, Provenance, ResolvedHook } from "../src/types.js";
 
-// Reaching src/internal/matcher/ and src/internal/spec/ directly (rather
-// than through src/index.ts's exports, per the writing-tests skill) is a
-// deliberate, narrowly scoped exception: this module has no public surface
-// in this issue and never will one for its own plumbing types — see
-// eslint.config.mjs's "tests/static-layer-unit-tests" block for the full
-// reasoning.
-
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
 const REAL_SPEC_PATH = path.join(REPO_ROOT, "spec", "claude-code-2.1.251-2.2.0.json");
 

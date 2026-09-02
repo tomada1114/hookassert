@@ -15,16 +15,9 @@ import type {
   UnknownReason,
 } from "../src/types.js";
 
-// Reaching src/internal/assert/, src/internal/fixture/, and
-// src/internal/matcher/ directly (rather than through src/index.ts's
-// exports, per the writing-tests skill) is a deliberate, narrowly scoped
-// exception: none of these modules has a public runtime surface in this
-// issue and assertCase/summarize won't have one until a later `test`-command
-// issue's composition root wires them in — see eslint.config.mjs's
-// "tests/static-layer-unit-tests" block for the full reasoning. The
-// *published types* (`CaseResult`, `Summary`, `ExecOutcome`, `PayloadOrigin`,
-// `UnknownReason`, ...) are already part of the public contract, so those
-// come from "../src/types.js" like any other type test's imports.
+// The *published types* (`CaseResult`, `Summary`, `ExecOutcome`, `PayloadOrigin`,
+// `UnknownReason`, ...) are part of the public contract, so those come from
+// "../src/types.js" like any other type test's imports.
 
 let nextOffset = 0;
 

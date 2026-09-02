@@ -5,13 +5,6 @@ import { describe, expect, it } from "vitest";
 
 import { LINT_RULES } from "../src/internal/lint/index.js";
 
-// Reaching src/internal/lint/ directly (rather than through src/index.ts's
-// exports, per the writing-tests skill) is a deliberate, narrowly scoped
-// exception — see eslint.config.mjs's "tests/static-layer-unit-tests" block,
-// which this file is added to, for the full reasoning: none of the static
-// layer has a public surface to reach through, and never will one for its
-// own plumbing types.
-
 const DOC_PATH = fileURLToPath(
   new URL("../docs/troubleshooting-map.md", import.meta.url),
 );

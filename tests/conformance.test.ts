@@ -70,11 +70,12 @@ interface SpecLike {
 
 /**
  * The real spec, read as plain JSON -- never through `loadSpecFile`
- * (`src/internal/spec/index.js`), which is off limits here: `tests/conformance
- * .test.ts` is not in eslint.config.mjs's `tests/static-layer-unit-tests`
- * allowlist, matching the design's black-box constraint (this issue treats
+ * (`src/internal/spec/index.js`). Lint would now permit that import, since a
+ * test may reach a module through its own index; the constraint here is the
+ * design's, not the linter's. This suite is black-box on purpose: it treats
  * the spec the same way scripts/conformance.mjs itself does -- as data, not
- * as an import).
+ * as an import -- so a bug in the loader cannot hide a conformance failure by
+ * being on both sides of the comparison.
  */
 const REAL_SPEC = JSON.parse(readFileSync(SPEC_PATH, "utf8")) as SpecLike;
 

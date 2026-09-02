@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import { runCli } from "../src/cli.js";
 import { UsageError } from "../src/internal/errors.js";
-import { createUnimplementedSpawner } from "../src/internal/exec/spawner.js";
+import { createUnimplementedSpawner } from "../src/internal/exec/index.js";
 import type { MatcherOutcome } from "../src/internal/matcher/index.js";
 import {
   isReportFormat,
@@ -25,14 +25,6 @@ import {
 } from "../src/internal/report/index.js";
 import { hooksForEvent, loadSettings } from "../src/internal/settings/index.js";
 import type { Provenance, ResolvedHook } from "../src/types.js";
-
-// Reaching src/internal/report/, src/internal/matcher/,
-// src/internal/settings/ and src/internal/exec/ directly (rather than through
-// src/index.ts's exports, per the writing-tests skill) is a deliberate,
-// narrowly scoped
-// exception: none of these modules has a public surface in this issue and
-// never will one for its own plumbing types — see eslint.config.mjs's
-// "tests/static-layer-unit-tests" block for the full reasoning.
 
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
 const SCHEMA_PATH = path.join(REPO_ROOT, "schema", "report.schema.json");

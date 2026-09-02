@@ -26,13 +26,6 @@ import type { SettingsSource } from "../src/internal/settings/index.js";
 import { loadSpecFile, parseClaudeVersion } from "../src/internal/spec/index.js";
 import type { Spec } from "../src/internal/spec/index.js";
 
-// Reaching src/internal/lint/, src/internal/spec/, src/internal/matcher/,
-// and src/internal/settings/ directly (rather than through src/index.ts's
-// exports, per the writing-tests skill) is a deliberate, narrowly scoped
-// exception: none of these modules has a public surface in this issue and
-// never will one for their own plumbing types — see eslint.config.mjs's
-// "tests/static-layer-unit-tests" block for the full reasoning.
-
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
 const REAL_SPEC_PATH = path.join(REPO_ROOT, "spec", "claude-code-2.1.251-2.2.0.json");
 const REAL_SPEC: Spec = loadSpecFile(REAL_SPEC_PATH);
