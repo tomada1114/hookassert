@@ -526,7 +526,7 @@ describe("inspectPackageEntries", () => {
   it("exposes the deliberately reviewable package limits", () => {
     expect(PACKAGE_LIMITS).toEqual({
       maxUnpackedBytes: 2 * 1024 * 1024,
-      maxFileCount: 200,
+      maxFileCount: 400,
       maxSingleFileBytes: 128 * 1024,
     });
   });
