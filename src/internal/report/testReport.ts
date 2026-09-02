@@ -22,7 +22,11 @@ import type {
   Summary,
   UnknownReason,
 } from "../../types.js";
-import { renderGithubFinding, renderGithubHeader } from "./github.js";
+import {
+  relativizeForGithub,
+  renderGithubFinding,
+  renderGithubHeader,
+} from "./github.js";
 import type { ReportHeader } from "./summary.js";
 
 /** One fixture case's result, identified by which file and position it came from. */
@@ -236,31 +240,13 @@ type JsonCaseResult =
 
 /** Build the {@link JsonCaseResult} `renderTestJson` emits for one `CaseResult`. */
 function toJsonCaseResult(result: CaseResult): JsonCaseResult {
-  switch (result.kind) {
-    case "pass":
-      return {
-        kind: "pass",
-        origin: result.origin,
-        decidedBy: result.decidedBy ?? null,
-      };
-    case "fail":
-      return {
-        kind: "fail",
-        origin: result.origin,
-        diffs: result.diffs,
-        nonFiring: result.nonFiring,
-        decidedBy: result.decidedBy ?? null,
-      };
-    case "unknown":
-      return {
-        kind: "unknown",
-        origin: result.origin,
-        reasons: result.reasons,
-        decidedBy: result.decidedBy ?? null,
-      };
-    case "skipped":
-      return { kind: "skipped", origin: result.origin, reason: result.reason };
+  if (result.kind === "skipped") {
+    return result;
   }
+  // Spread rather than rebuild field by field: a field added to `CaseResult`
+  // later then reaches the JSON report on its own, instead of silently
+  // vanishing from it until someone notices this function was not updated.
+  return { ...result, decidedBy: result.decidedBy ?? null };
 }
 
 /** JSON-serializable shape one {@link TestCaseReport} renders to. */
@@ -322,6 +308,17 @@ export function renderTestJson(report: TestReport): string {
 }
 
 /**
+ * Whether `file` resolves to a path inside `workspaceRoot` — the only place a
+ * GitHub Actions annotation can attach, since `file=` is resolved relative to
+ * the checkout root and an absolute path outside it matches no line in the
+ * diff view.
+ */
+function attachesInWorkspace(file: string, workspaceRoot: string): boolean {
+  const relative = relativizeForGithub(file, workspaceRoot);
+  return !relative.startsWith("/") && !/^[A-Za-z]:\//.test(relative);
+}
+
+/**
  * Render a {@link TestReport} as GitHub Actions workflow commands: the
  * leading header line, then one `::error` per `"fail"` case.
  *
@@ -333,7 +330,11 @@ export function renderTestJson(report: TestReport): string {
  * *unless* the failure names a `decidedBy` hook — a hook fired and its own
  * `Decision` decided the case's verdict — in which case the annotation
  * points at that hook's own `Provenance` instead, the more actionable
- * location.
+ * location. A deciding hook declared outside the workspace (the user layer's
+ * `~/.claude/settings.json`, or the enterprise layer's) is the exception: an
+ * annotation whose `file=` is not inside `GITHUB_WORKSPACE` silently attaches
+ * to nothing, so the annotation stays on the fixture — which is inside the
+ * checkout — and names the deciding hook in its message instead.
  */
 export function renderTestGithub(report: TestReport, workspaceRoot: string): string {
   const lines: string[] = [renderGithubHeader(report.header)];
@@ -347,20 +348,27 @@ export function renderTestGithub(report: TestReport, workspaceRoot: string): str
       result.nonFiring === undefined
         ? result.diffs.map(describeDiff).join("; ")
         : describeNonFiring(result.nonFiring);
-    const location =
-      result.decidedBy === undefined
-        ? { file: caseReport.file, line: 1 }
-        : {
-            file: result.decidedBy.hook.provenance.file,
-            line: result.decidedBy.hook.provenance.line,
-          };
+    const { decidedBy } = result;
+    const attachable =
+      decidedBy !== undefined &&
+      attachesInWorkspace(decidedBy.hook.provenance.file, workspaceRoot);
+    const location = attachable
+      ? {
+          file: decidedBy.hook.provenance.file,
+          line: decidedBy.hook.provenance.line,
+        }
+      : { file: caseReport.file, line: 1 };
+    const message =
+      decidedBy === undefined || attachable
+        ? detail
+        : `${detail} — decided by ${describeDecidedBy(decidedBy)}`;
     lines.push(
       renderGithubFinding(
         {
           file: location.file,
           line: location.line,
           title: `test case #${String(caseReport.index)}: ${caseLabel(caseReport)}`,
-          message: detail,
+          message,
         },
         workspaceRoot,
       ),

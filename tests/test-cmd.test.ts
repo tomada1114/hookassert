@@ -476,6 +476,38 @@ describe("combining more than one firing hook (issue #42)", () => {
     // annotated instead of line 1 of the fixture.
     expect(github.stdout).toContain("file=.claude/settings.json");
   });
+
+  it("a deciding hook outside the workspace keeps the github annotation on the fixture and names the hook in the message", async () => {
+    // The user layer denies here, and its settings file lives under the home
+    // dir — outside `cwd`, so an annotation pointing at it would attach to
+    // nothing in the checkout.
+    setUpTwoLayers(EXIT2_STDERR, EXIT0_SILENT);
+    const fixturePath = multiHookFixturePath();
+
+    const github = await runCli(
+      [
+        "test",
+        fixturePath,
+        "--claude-version",
+        "2.1.300",
+        "--yes",
+        "--format",
+        "github",
+      ],
+      "hookassert",
+      testDeps({
+        cwd: multiHookProjectDir,
+        home: multiHookHomeDir,
+        spawner: new FakeSpawner(denyOutcomes),
+      }),
+    );
+
+    expect(github.stdout).toContain("file=fixture.yaml");
+    expect(github.stdout).not.toContain(
+      `file=${path.join(multiHookHomeDir, ".claude", "settings.json")}`,
+    );
+    expect(github.stdout).toContain("decided by");
+  });
 });
 
 describe("the consent gate", () => {
