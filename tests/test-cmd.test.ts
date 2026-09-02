@@ -7,17 +7,9 @@ import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { runCli, type CliDeps } from "../src/cli.js";
-import { NodeSpawner } from "../src/internal/exec/spawner.js";
-import type { Spawner, SpawnRequest } from "../src/internal/exec/spawner.js";
+import { NodeSpawner } from "../src/internal/exec/index.js";
+import type { Spawner, SpawnRequest } from "../src/internal/exec/index.js";
 import type { ExecOutcome } from "../src/types.js";
-
-// Reaching src/internal/exec/spawner.ts directly (rather than through
-// src/index.ts's exports, per the writing-tests skill) is a deliberate,
-// narrowly scoped exception, the same one tests/cli.test.ts and
-// tests/executor.test.ts already take: `Spawner` has no public surface, and
-// this file's whole point is proving `test`'s consent gate and spawn plan
-// mechanically through an injected one — see eslint.config.mjs's
-// "tests/static-layer-unit-tests" block for the full reasoning.
 
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
 const HOOKS_DIR = fileURLToPath(new URL("./fixtures/hooks/", import.meta.url));

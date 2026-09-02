@@ -15,15 +15,8 @@ import type {
   RawHook,
   ResolvedSettings,
   SettingsSource,
-} from "../src/internal/settings/types.js";
+} from "../src/internal/settings/index.js";
 import type { EventName, SettingsLayer } from "../src/types.js";
-
-// Reaching src/internal/settings/ directly (rather than through
-// src/index.ts's exports, per the writing-tests skill) is a deliberate,
-// narrowly scoped exception: this module has no public surface in this
-// issue and never will one for its own plumbing types (SettingsSource,
-// ResolvedSettings) — see eslint.config.mjs's "tests/static-layer-unit-tests"
-// block for the full reasoning.
 
 const FIXTURES_DIR = fileURLToPath(new URL("./fixtures/settings/", import.meta.url));
 

@@ -13,17 +13,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { isMain, main, runCli, type CliDeps } from "../src/cli.js";
-import { createUnimplementedSpawner } from "../src/internal/exec/spawner.js";
-import type { Spawner, SpawnRequest } from "../src/internal/exec/spawner.js";
+import { createUnimplementedSpawner } from "../src/internal/exec/index.js";
+import type { Spawner, SpawnRequest } from "../src/internal/exec/index.js";
 import type { ExecOutcome } from "../src/types.js";
-
-// Reaching src/internal/exec/spawner.ts directly (rather than through
-// src/index.ts's exports, per the writing-tests skill) is a deliberate,
-// narrowly scoped exception: explain's zero-spawn guarantee can only be
-// proven by injecting a real `Spawner` implementation into its dependency
-// graph, and that interface has no public surface — see
-// eslint.config.mjs's "tests/static-layer-unit-tests" block for the full
-// reasoning.
 
 const FIXTURES_DIR = fileURLToPath(new URL("./fixtures/cli/", import.meta.url));
 const PROJECT_WITH_HOOKS_DIR = path.join(FIXTURES_DIR, "project-with-hooks");

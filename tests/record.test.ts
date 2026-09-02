@@ -26,11 +26,14 @@ import {
   loadSourceHooks,
   mergeSources,
 } from "../src/internal/settings/index.js";
-import { insertCaptureHook, removeCaptureHook } from "../src/internal/settings/edit.js";
-import type { CapturePlan } from "../src/internal/settings/edit.js";
+import {
+  insertCaptureHook,
+  removeCaptureHook,
+} from "../src/internal/settings/index.js";
+import type { CapturePlan } from "../src/internal/settings/index.js";
 import { matchHooks } from "../src/internal/matcher/index.js";
 import { loadSpecFile } from "../src/internal/spec/index.js";
-import { buildCaptureScript } from "../src/internal/record/capture.js";
+import { buildCaptureScript } from "../src/internal/record/index.js";
 import {
   defaultCaptureDir,
   hookassertDir,
@@ -40,19 +43,12 @@ import {
   sessionFilePath,
   startRecordSession,
   stopRecordSession,
-} from "../src/internal/record/session.js";
-import type { SettingsSource } from "../src/internal/settings/types.js";
+} from "../src/internal/record/index.js";
+import type { SettingsSource } from "../src/internal/settings/index.js";
 
-// Reaching src/internal/settings/, src/internal/record/, src/internal/matcher/
-// and src/internal/spec/ directly (rather than through src/index.ts's
-// exports, per the writing-tests skill) is a deliberate, narrowly scoped
-// exception: none of this issue's own plumbing (CapturePlan, CaptureAnchors,
-// the record session bookkeeping) has a public surface, or ever will — see
-// eslint.config.mjs's "tests/static-layer-unit-tests" block for the full
-// reasoning. This file does real filesystem work under mkdtemp and spawns
-// the generated capture script as a real process, which is why it joins
-// vitest.config.ts's automationTests list rather than the default unit
-// project.
+// This file does real filesystem work under mkdtemp and spawns the generated
+// capture script as a real process, which is why it joins vitest.config.ts's
+// automationTests list rather than the default unit project.
 
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
 const REAL_SPEC_PATH = path.join(REPO_ROOT, "spec", "claude-code-2.1.251-2.2.0.json");

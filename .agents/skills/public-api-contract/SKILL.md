@@ -46,11 +46,14 @@ public API by accident.
   directory, not the name, is what makes it private. Exporting one of its symbols from
   `index.ts` publishes it. Enforced by the public-api/internal-stays-private block in
   `eslint.config.mjs`, a `src/index.ts`-scoped `no-restricted-syntax` rule.
-- Nothing outside `src/**` may import from `src/internal/` directly; reach it only
-  through what `index.ts` re-exports. Enforced by the
-  boundaries/internal-is-not-importable block in `eslint.config.mjs`, a
-  `no-restricted-imports` rule over `tests/**/*.ts` and `scripts/**/*.mjs`. It covers
-  the built copy under dist as well as the source — the same private module either way.
+- Nothing outside `src/**` may import from `src/internal/` directly, except `tests/**`,
+  which may import a module's `index.ts` — a test is not a consumer. Repository
+  automation is: `scripts/**/*.mjs` reaches the package only through what `src/index.ts`
+  re-exports. Enforced by two `no-restricted-imports` blocks in `eslint.config.mjs` —
+  boundaries/internal-is-not-importable over `scripts/**/*.mjs` (unconditional) and
+  boundaries/tests-reach-internal-through-its-index over `tests/**/*.ts` (index-only).
+  Both cover the built copy under dist as well as the source — the same private module
+  either way, and a test never reads build output.
 
 ## `package.json` allowlists
 

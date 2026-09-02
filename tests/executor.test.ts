@@ -27,14 +27,6 @@ import { resolveDecision } from "../src/internal/decision/index.js";
 import { loadSpecFile } from "../src/internal/spec/index.js";
 import type { EventName, ExecOutcome, Provenance, ResolvedHook } from "../src/types.js";
 
-// Reaching src/internal/exec/, src/internal/fixture/, src/internal/decision/
-// and src/internal/spec/ directly (rather than through src/index.ts's
-// exports, per the writing-tests skill) is a deliberate, narrowly scoped
-// exception: the executor has no public surface in this issue and won't have
-// one until a later test-cmd issue's composition root wires it in — see
-// eslint.config.mjs's "tests/static-layer-unit-tests" block for the full
-// reasoning.
-
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
 const REAL_SPEC_PATH = path.join(REPO_ROOT, "spec", "claude-code-2.1.251-2.2.0.json");
 const REAL_SPEC = loadSpecFile(REAL_SPEC_PATH);

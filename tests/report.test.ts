@@ -5,13 +5,6 @@ import { buildReportHeader, renderPretty } from "../src/internal/report/index.js
 import type { ExplainReport } from "../src/internal/report/index.js";
 import type { Provenance, ResolvedHook } from "../src/types.js";
 
-// Reaching src/internal/report/ and src/internal/matcher/ directly (rather
-// than through src/index.ts's exports, per the writing-tests skill) is a
-// deliberate, narrowly scoped exception: neither module has a public surface
-// in this issue and never will one for its own plumbing types — see
-// eslint.config.mjs's "tests/static-layer-unit-tests" block for the full
-// reasoning.
-
 function makeProvenance(overrides: Partial<Provenance> = {}): Provenance {
   return {
     file: "/abs/project/.claude/settings.json",

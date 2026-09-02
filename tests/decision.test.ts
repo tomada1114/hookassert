@@ -17,15 +17,9 @@ import type { EventSpec, Spec } from "../src/internal/spec/index.js";
 import { loadSpecFile } from "../src/internal/spec/index.js";
 import type { Decision, EventName, ExecOutcome, UnknownReason } from "../src/types.js";
 
-// Reaching src/internal/decision/ and src/internal/spec/ directly (rather
-// than through src/index.ts's exports, per the writing-tests skill) is a
-// deliberate, narrowly scoped exception: neither module has a public runtime
-// surface in this issue and won't have one until a later executor issue's
-// composition root wires them in — see eslint.config.mjs's
-// "tests/static-layer-unit-tests" block for the full reasoning. The
-// *published types* (`Decision`, `UnknownReason`, `ExecOutcome`) are already
-// part of the public contract, so those come from "../src/types.js" like any
-// other type test's imports.
+// The *published types* (`Decision`, `UnknownReason`, `ExecOutcome`) are part
+// of the public contract, so those come from "../src/types.js" like any other
+// type test's imports.
 
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
 const REAL_SPEC_PATH = path.join(REPO_ROOT, "spec", "claude-code-2.1.251-2.2.0.json");

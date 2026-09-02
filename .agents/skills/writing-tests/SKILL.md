@@ -23,10 +23,14 @@ tests (`type-testing`), the shape of the error classes a test asserts against
   `it("rejects a fractional timeout", ...)`, not `it("calls validate")`.
 - One behavior per `it`. Branching inside a test body belongs in a separate `it` or an
   `it.each` table, never an `if` in the test.
-- Test public behavior through `src/index.ts`'s exports, never through
-  `src/internal/**`. The interface is the test surface: if you find yourself wanting to
-  reach past a module's exports to assert something, the module is the wrong shape, not
-  the test.
+- Test a module through its own index. Public behavior goes through `src/index.ts`'s
+  exports; an internal module — most of the static layer has no public surface and never
+  will — is tested through `src/internal/<dir>/index.ts` (or `src/internal/errors.ts`).
+  **Never import a file beneath a module's index.** A symbol that is not on the index is
+  one the module has not decided to expose, and a test must not decide for it: if you
+  find yourself wanting to reach past it, either the module should export the symbol or
+  it is the wrong shape — the test is not the place to settle that. Enforced by the
+  boundaries/tests-reach-internal-through-its-index block in `eslint.config.mjs`.
 - Cover the happy path and the error path of every public function.
 
 ## Asserting errors
@@ -50,11 +54,11 @@ the failure path too, not only on success.
 
 The observable contract of a command is `argv` → exit code, stdout, and stderr. Drive
 that contract through the CLI entry, such as `src/cli.ts`'s exported runner, and assert
-the complete result for representative arguments. Do not reach into `src/internal/` to
-make command logic testable; if direct unit access is required, the
-`public-api-contract` decision makes that logic public instead. A child-process test may
-exercise the installed command path when the executable boundary itself matters, but it
-should still assert only those caller-visible streams and status.
+the complete result for representative arguments. Do not reach past a module's index to
+make command logic testable; if direct unit access is required, the module's own
+`index.ts` exports it, or the `public-api-contract` decision makes that logic public. A
+child-process test may exercise the installed command path when the executable boundary
+itself matters, but it should still assert only those caller-visible streams and status.
 
 ## Expected values come from outside the code
 
