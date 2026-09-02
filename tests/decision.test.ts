@@ -211,7 +211,7 @@ describe("a launch failure (issue #39) resolves to error/launch-failed before an
     const decision = resolveDecision(
       spec,
       "PreToolUse",
-      makeOutcome({ exitCode: -1, launchError: "spawn pyton3 ENOENT" }),
+      makeOutcome({ exitCode: -1, launchError: "spawn python33 ENOENT" }),
     );
     expect(decision.kind).toBe("error");
     if (decision.kind === "error") {
@@ -227,7 +227,7 @@ describe("a launch failure (issue #39) resolves to error/launch-failed before an
     const decision = resolveDecision(
       spec,
       "PreToolUse",
-      makeOutcome({ exitCode: 2, launchError: "spawn pyton3 ENOENT" }),
+      makeOutcome({ exitCode: 2, launchError: "spawn python33 ENOENT" }),
     );
     expect(decision.kind).toBe("error");
     if (decision.kind === "error") {
@@ -239,7 +239,11 @@ describe("a launch failure (issue #39) resolves to error/launch-failed before an
     const decision = resolveDecision(
       spec,
       "PreToolUse",
-      makeOutcome({ exitCode: -1, timedOut: true, launchError: "spawn pyton3 ENOENT" }),
+      makeOutcome({
+        exitCode: -1,
+        timedOut: true,
+        launchError: "spawn python33 ENOENT",
+      }),
     );
     expect(decision.kind).toBe("error");
     if (decision.kind === "error") {

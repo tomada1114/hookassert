@@ -441,7 +441,7 @@ describe("ExecOutcome", () => {
       stdout: "",
       stderr: "",
       timedOut: false,
-      launchError: "spawn pyton3 ENOENT",
+      launchError: "spawn python33 ENOENT",
     };
     expectTypeOf(outcome.launchError).toEqualTypeOf<string | undefined>();
   });
@@ -528,7 +528,7 @@ describe("DecidingHook", () => {
     const launchFailed: DecidingHook = {
       hook,
       decision: { kind: "error", exitCode: -1, cause: "launch-failed" },
-      launchError: "spawn pyton3 ENOENT",
+      launchError: "spawn python33 ENOENT",
     };
     expectTypeOf(launchFailed.launchError).toEqualTypeOf<string | undefined>();
   });

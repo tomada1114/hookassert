@@ -302,7 +302,7 @@ describe("launch failures (issue #39)", () => {
           // illustrative example.
           {
             matcher: "LaunchFail",
-            hooks: [{ type: "command", command: "pyton3", args: [] }],
+            hooks: [{ type: "command", command: "python33", args: [] }],
           },
         ],
       },
@@ -361,8 +361,8 @@ describe("launch failures (issue #39)", () => {
       testDeps({ cwd: launchFailProjectDir, spawner: new RecordingSpawner() }),
     );
     expect(pretty.stdout).toContain("FAIL");
-    expect(pretty.stdout).toContain("hook never launched: spawn pyton3 ENOENT");
-    expect(pretty.stdout).toContain('command "pyton3"');
+    expect(pretty.stdout).toContain("hook never launched: spawn python33 ENOENT");
+    expect(pretty.stdout).toContain('command "python33"');
     expect(pretty.stdout).toMatch(/settings\.json:\d+\)/);
     // The launch message already names the hook and its location, so the
     // "decided by" suffix (only relevant for multi-hook cases anyway) never
@@ -383,7 +383,7 @@ describe("launch failures (issue #39)", () => {
       testDeps({ cwd: launchFailProjectDir, spawner: new RecordingSpawner() }),
     );
     expect(github.stdout).toMatch(/::error file=\.claude\/settings\.json,line=\d+/);
-    expect(github.stdout).toContain("hook never launched: spawn pyton3 ENOENT");
+    expect(github.stdout).toContain("hook never launched: spawn python33 ENOENT");
   });
 });
 

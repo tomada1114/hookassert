@@ -182,7 +182,7 @@ export interface ExecOutcome {
 
   /**
    * The OS-reported reason the process could not be launched at all (for
-   * example `spawn pyton3 ENOENT`, or `EACCES`), or `undefined` for every
+   * example `spawn python33 ENOENT`, or `EACCES`), or `undefined` for every
    * process that actually started.
    *
    * @remarks

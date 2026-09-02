@@ -140,7 +140,7 @@ hookassert --help
   hook (one declaring `args`) naming a command that does not exist, a missing
   interpreter — resolves to `decision: error` (`cause: launch-failed`) rather than being
   mistaken for a hook that ran and exited non-zero. A failing case's `pretty` and
-  `github` output then shows the OS-reported reason (`spawn pyton3 ENOENT`, say)
+  `github` output then shows the OS-reported reason (`spawn python33 ENOENT`, say)
   alongside the hook's own declaration, and the JSON report carries it as
   `decidedBy.launchError`. A shell-form hook (no `args`, the shape Claude Code's own
   docs show) always launches `/bin/sh` successfully, so a typo'd `command` there is

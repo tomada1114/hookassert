@@ -387,7 +387,7 @@ describe("assertCase: multiple firing hooks", () => {
           decision: { kind: "error", exitCode: -1, cause: "launch-failed" },
           execOutcome: makeExecOutcome({
             exitCode: -1,
-            launchError: "spawn pyton3 ENOENT",
+            launchError: "spawn python33 ENOENT",
           }),
         }),
       ],
@@ -395,7 +395,7 @@ describe("assertCase: multiple firing hooks", () => {
 
     const result = expectPass(assertCase(caseData, observation));
 
-    expect(result.decidedBy?.launchError).toBe("spawn pyton3 ENOENT");
+    expect(result.decidedBy?.launchError).toBe("spawn python33 ENOENT");
   });
 });
 
