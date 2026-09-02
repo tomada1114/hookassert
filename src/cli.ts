@@ -41,6 +41,8 @@ import {
 } from "./internal/fixture/index.js";
 import { buildLintContext, LINT_RULES } from "./internal/lint/index.js";
 import {
+  defaultCaptureDir,
+  emitFixtures,
   isRecordSessionActive,
   startRecordSession,
   stopRecordSession,
@@ -353,14 +355,81 @@ function resolveVersionContext(
   }
 }
 
-/** `explain`'s own option table: `common` plus `--emit-fixtures`. */
+/** `explain`'s own option table: `common` plus `--emit-fixtures` and `--capture-dir`. */
 const EXPLAIN_OPTIONS = {
   settings: { type: "string", multiple: true },
   "claude-version": { type: "string" },
   format: { type: "string" },
   "emit-fixtures": { type: "string" },
+  "capture-dir": { type: "string" },
   help: { type: "boolean", short: "h" },
 } as const;
+
+/**
+ * Read every captured payload envelope and write one fixture YAML file per
+ * envelope into `--emit-fixtures`' own directory argument.
+ *
+ * @remarks
+ * A standalone mode of `explain`, the same way `record --stop` is a
+ * standalone mode of `record`: it takes no `<event>`/`[tool]` and none of
+ * `--settings`/`--claude-version`/`--format`, because it never matches hooks
+ * or renders an `ExplainReport` at all — it only reads `record`'s own
+ * captured envelopes and writes fixture files, so an option that means
+ * something for that other mode would silently do nothing here. Only
+ * `--capture-dir` (the source directory to read envelopes from, defaulting
+ * to `record`'s own {@link defaultCaptureDir}, mirroring `record`'s own flag
+ * of the same name) applies alongside it.
+ *
+ * @throws {UsageError} a positional argument, or one of
+ * `--settings`/`--claude-version`/`--format`, was given alongside
+ * `--emit-fixtures`.
+ * (Also propagates `RecordNoCapturesError` from `emitFixtures` when the
+ * capture directory holds no readable envelopes.)
+ */
+function runExplainEmitFixtures(
+  parsed: ReturnType<typeof parseArgsForExplain>,
+  deps: CliDeps,
+  emitFixturesDir: string,
+): CliResult {
+  if (
+    parsed.positionals.length > 0 ||
+    parsed.values.settings !== undefined ||
+    parsed.values["claude-version"] !== undefined ||
+    parsed.values.format !== undefined
+  ) {
+    throw new UsageError(
+      "explain --emit-fixtures takes no <event>/[tool] argument and none of " +
+        "--settings/--claude-version/--format: it only reads captured payload " +
+        "envelopes and writes fixture files, and none of those options change " +
+        "that. Pass --capture-dir to read envelopes from a location other " +
+        "than record's own default.",
+    );
+  }
+
+  const outputDir = path.resolve(deps.cwd, emitFixturesDir);
+  const captureDir =
+    parsed.values["capture-dir"] === undefined
+      ? defaultCaptureDir(deps.cwd)
+      : path.resolve(deps.cwd, parsed.values["capture-dir"]);
+
+  const result = emitFixtures({ captureDir, outputDir });
+
+  const stdout =
+    `Wrote ${String(result.files.length)} fixture file(s) to ${result.outputDir}:\n` +
+    result.files.map((file) => `  ${file}\n`).join("");
+
+  return { exitCode: 0, stdout, stderr: "" };
+}
+
+/** `parseArgs({strict:true})` result shape for `EXPLAIN_OPTIONS`, named so `runExplainEmitFixtures` can share it with `runExplain`. */
+function parseArgsForExplain(args: readonly string[]) {
+  return parseArgs({
+    args,
+    strict: true,
+    allowPositionals: true,
+    options: EXPLAIN_OPTIONS,
+  });
+}
 
 /**
  * `parseArgs({ strict: true })` throws on an unknown option, a missing
@@ -370,15 +439,15 @@ const EXPLAIN_OPTIONS = {
 function runExplain(args: readonly string[], deps: CliDeps): CliResult {
   let parsed;
   try {
-    parsed = parseArgs({
-      args,
-      strict: true,
-      allowPositionals: true,
-      options: EXPLAIN_OPTIONS,
-    });
+    parsed = parseArgsForExplain(args);
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     throw new UsageError(`invalid options for explain: ${reason}`);
+  }
+
+  const emitFixturesDir = parsed.values["emit-fixtures"];
+  if (emitFixturesDir !== undefined) {
+    return runExplainEmitFixtures(parsed, deps, emitFixturesDir);
   }
 
   const [event, tool] = parsed.positionals;
@@ -400,10 +469,6 @@ function runExplain(args: readonly string[], deps: CliDeps): CliResult {
       `unrecognized event ${JSON.stringify(event)}. ` +
         `Expected one of the documented Claude Code hook events.`,
     );
-  }
-
-  if (parsed.values["emit-fixtures"] !== undefined) {
-    throw new UsageError("the --emit-fixtures option is not implemented yet.");
   }
 
   // Validated here, before any I/O (version resolution, spec loading, the

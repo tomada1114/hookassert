@@ -10,6 +10,8 @@
 
 export { buildCaptureScript, CAPTURE_SCRIPT_FILENAME } from "./capture.js";
 export type { CaptureScriptOptions } from "./capture.js";
+export { emitFixtures } from "./emit.js";
+export type { EmitFixturesOptions, EmitFixturesResult } from "./emit.js";
 export {
   defaultCaptureDir,
   hookassertDir,
