@@ -8,6 +8,12 @@
  * not just by convention.
  */
 
+export {
+  generateFixtureFile,
+  readCapturedEnvelopes,
+  YAML_SCHEMA_COMMENT,
+} from "./generate.js";
+export type { CapturedEnvelope, GeneratedFixture } from "./generate.js";
 export { isValidRawFixtureFile, validateFixture } from "./guards.js";
 export { loadFixture, loadFixtureFile, loadFixtures } from "./load.js";
 export type {

@@ -418,3 +418,37 @@ export class RecordRestoreError extends HookassertError {
     this.sessionFile = sessionFile;
   }
 }
+
+/**
+ * Thrown when `explain --emit-fixtures` finds no captured payload envelopes
+ * to generate fixtures from.
+ *
+ * @remarks
+ * A stateful precondition this operation depends on — at least one envelope
+ * file written by a previous `record` session — could not be satisfied, the
+ * same class of failure {@link RecordNoSessionError} reports for "no active
+ * session to stop": nothing was found to act on, so this is a load-time-
+ * adjacent failure (exit `5`) rather than a run that produced zero fixtures.
+ */
+export class RecordNoCapturesError extends HookassertError {
+  /** Stable discriminator, unchanged across non-breaking releases. */
+  readonly code = "ERR_RECORD_NO_CAPTURES" as const;
+
+  /** No-captures failures always exit 5 (load error). */
+  readonly exitCode = 5;
+
+  /** Absolute path of the capture directory that held no envelope files. */
+  readonly captureDir: string;
+
+  /**
+   * @param captureDir - Absolute path of the capture directory that was searched.
+   */
+  constructor(captureDir: string) {
+    super(
+      `explain --emit-fixtures found no captured payload envelopes in ${captureDir}. ` +
+        "Run `hookassert record` (and generate some hook activity) before emitting fixtures.",
+    );
+    this.name = "RecordNoCapturesError";
+    this.captureDir = captureDir;
+  }
+}
