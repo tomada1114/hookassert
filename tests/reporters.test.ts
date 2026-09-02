@@ -162,23 +162,20 @@ describe("renderJson", () => {
     expect(validate(parsed)).toBe(false);
   });
 
-  it("stays schema-valid for a negative or fractional timeoutMs, since settings/load.ts does not reject either", () => {
-    // A settings file's `timeout` is an arbitrary JSON number multiplied by
-    // 1000; nothing in the pipeline rejects a negative or fractional value.
-    // The schema must describe what the tool can actually emit, not what a
-    // well-behaved settings file would contain.
+  it("stays schema-valid for a fractional timeoutMs, since settings/load.ts converts fractional seconds as-is", () => {
+    // A settings file's `timeout` is a finite, strictly-positive number of
+    // seconds (settings/load.ts rejects zero, negative, and non-finite
+    // values at load time); a fractional value such as `0.5` is a
+    // meaningful declaration and converts to `timeoutMs: 500` exactly as
+    // today. The schema must describe what the tool can actually emit.
     const settings = loadSettings([
       {
-        path: path.join(
-          SETTINGS_FIXTURES_DIR,
-          "with-negative-and-fractional-timeout",
-          "project.json",
-        ),
+        path: path.join(SETTINGS_FIXTURES_DIR, "fractional-timeout", "project.json"),
         layer: "project",
       },
     ]);
     const hooks = hooksForEvent(settings, "PreToolUse");
-    expect(hooks.map((hook) => hook.timeoutMs)).toEqual([-1000, 0.5]);
+    expect(hooks.map((hook) => hook.timeoutMs)).toEqual([500]);
 
     const report = baseReport({ firing: hooks });
     const parsed: unknown = JSON.parse(renderJson(report));
@@ -187,6 +184,22 @@ describe("renderJson", () => {
     const validate = ajv.compile(readSchema() as object);
     expect(validate(parsed)).toBe(true);
   });
+
+  it.each([0, -1000])(
+    "rejects a report shape ajv should reject: timeoutMs %i, now that the schema requires exclusiveMinimum 0",
+    (timeoutMs) => {
+      // settings/load.ts can no longer emit a non-positive timeoutMs, but the
+      // schema's `exclusiveMinimum: 0` is what actually enforces that going
+      // forward — fabricate the shape directly to prove the schema itself
+      // rejects it, independent of the loader.
+      const report = baseReport({ firing: [makeHook({ timeoutMs })] });
+      const parsed: unknown = JSON.parse(renderJson(report));
+
+      const ajv = new Ajv({ allErrors: true, strict: false });
+      const validate = ajv.compile(readSchema() as object);
+      expect(validate(parsed)).toBe(false);
+    },
+  );
 
   it("includes the detected version, spec range, and incompleteness notices as data fields", () => {
     const report = baseReport({

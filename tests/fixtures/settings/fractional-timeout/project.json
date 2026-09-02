@@ -6,13 +6,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "./scripts/negative-timeout.sh",
-            "timeout": -1
-          },
-          {
-            "type": "command",
             "command": "./scripts/fractional-timeout.sh",
-            "timeout": 0.0005
+            "timeout": 0.5
           }
         ]
       }

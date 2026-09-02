@@ -84,7 +84,7 @@
           "type": ["array", "null"],
           "items": { "type": "string" }
         },
-        "timeoutMs": { "type": ["number", "null"] },
+        "timeoutMs": { "type": ["number", "null"], "exclusiveMinimum": 0 },
         "dedupeKey": { "type": "string", "minLength": 1 },
         "provenance": { "$ref": "#/$defs/provenance" }
       }
@@ -110,7 +110,7 @@
           "type": ["array", "null"],
           "items": { "type": "string" }
         },
-        "timeoutMs": { "type": ["number", "null"] },
+        "timeoutMs": { "type": ["number", "null"], "exclusiveMinimum": 0 },
         "dedupeKey": { "type": "string", "minLength": 1 },
         "provenance": { "$ref": "#/$defs/provenance" },
         "matcherIgnored": { "type": "boolean" }
