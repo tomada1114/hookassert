@@ -10,6 +10,7 @@
 
 export { classifyMatcher } from "./classify.js";
 export { matchHooks } from "./match.js";
+export { findCatastrophicConstruct } from "./safety.js";
 export type {
   MatcherKind,
   MatcherOutcome,
