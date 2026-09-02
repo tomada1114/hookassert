@@ -69,11 +69,15 @@ const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
  * limit. The values stay deliberately reviewable literals so raising one is a
  * visible policy decision rather than a silent change.
  *
+ * `maxFileCount` was raised from 200 to 400 in #53 once `src/` alone reached
+ * 199 files; a value under the current `src` module count times three is a
+ * misconfiguration, not a tighter policy.
+ *
  * @type {PackageLimits}
  */
 export const PACKAGE_LIMITS = {
   maxUnpackedBytes: 2_097_152,
-  maxFileCount: 200,
+  maxFileCount: 400,
   maxSingleFileBytes: 131_072,
 };
 
