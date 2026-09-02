@@ -88,7 +88,7 @@ export function firedInExplainReport(explainReport, matcher) {
   if (!Array.isArray(firing)) {
     throw new ReportShapeError(
       "explain --format json report has no `firing` array.\n" +
-        "Expected: JsonExplainReport (schema/report.schema.json).\n" +
+        "Expected: JsonExplainReport (schema/explain-report.schema.json).\n" +
         "Next: run `node dist/cli.js explain <event> <tool> --format json` directly and compare its shape.",
     );
   }

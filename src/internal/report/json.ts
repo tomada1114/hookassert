@@ -1,9 +1,9 @@
 /**
  * The `json` reporter: a fixed, versioned rendering of an `ExplainReport`,
- * checked against `schema/report.schema.json`.
+ * checked against `schema/explain-report.schema.json`.
  *
  * @remarks
- * Static layer: pure — no I/O, no process, no write. `schema/report.schema.json`
+ * Static layer: pure — no I/O, no process, no write. `schema/explain-report.schema.json`
  * is a shipped public contract from the moment it ships: a later change to
  * this module's output shape needs the same `release-impact` review a
  * `src/index.ts` change would, because downstream CI tooling may parse this
@@ -14,8 +14,19 @@ import type { EventName, Provenance, ResolvedHook } from "../../types.js";
 import type { MatcherKind } from "../matcher/index.js";
 import type { ExplainReport } from "./summary.js";
 
-/** JSON shape of a {@link Provenance}, mirroring `schema/report.schema.json`'s `$defs.provenance`. */
-interface JsonProvenance {
+/**
+ * JSON shape of a {@link Provenance}, mirroring `$defs.provenance` — written
+ * out identically in every one of `schema/explain-report.schema.json`,
+ * `schema/test-report.schema.json`, and `schema/lint-report.schema.json`
+ * that carries one.
+ *
+ * @remarks
+ * Exported only because {@link JsonHook} — itself exported so
+ * `testReport.ts` can reuse {@link toJsonHook} rather than re-deriving the
+ * same `undefined` → `null` substitution a second time — carries this as a
+ * field's type.
+ */
+export interface JsonProvenance {
   readonly file: string;
   readonly layer: string;
   readonly line: number;
@@ -24,7 +35,7 @@ interface JsonProvenance {
 }
 
 /** JSON shape of a {@link ResolvedHook}, without the `matcherIgnored` field only a firing hook carries. */
-interface JsonHook {
+export interface JsonHook {
   readonly event: EventName;
   readonly matcher: string | null;
   readonly command: string;
@@ -47,18 +58,20 @@ interface JsonRejectedOutcome {
 }
 
 /**
- * The shape `renderJson` emits, validated by `schema/report.schema.json`.
+ * The shape `renderJson` emits, validated by `schema/explain-report.schema.json`.
  *
  * @remarks
  * `reportVersion` is this contract's own version, independent of the
- * package's own semver — a later issue reshaping this output bumps
- * `reportVersion` and updates the schema in the same change, per
- * `release-impact`. `reportType` is a separate, narrower discriminator: both
- * this shape and `test`'s own `JsonTestReport` (`testReport.ts`) currently
- * claim `reportVersion: "1"`, since each versions its own shape independently,
- * so `reportType` is what lets a consumer — or `schema/report.schema.json`,
- * which pins `"explain"` — tell the two apart before trusting `reportVersion`
- * to mean this document's shape rather than the other one's.
+ * package's own semver and of `test`'s and `lint`'s own `reportVersion` —
+ * see `renderInFormat`'s remark (`src/internal/report/format.ts`) for the
+ * rule that keeps a reshape of this output, its `reportVersion`, and
+ * `schema/explain-report.schema.json` moving together. `reportType` is a
+ * separate, narrower discriminator: this shape and `test`'s own
+ * `JsonTestReport` (`testReport.ts`) both currently claim `reportVersion:
+ * "1"`, since each versions its own shape independently, so `reportType` is
+ * what lets a consumer — or `schema/explain-report.schema.json`, which pins
+ * `"explain"` — tell the two apart before trusting `reportVersion` to mean
+ * this document's shape rather than the other one's.
  */
 export interface JsonExplainReport {
   readonly reportVersion: "1";
@@ -74,6 +87,7 @@ export interface JsonExplainReport {
   readonly rejected: readonly JsonRejectedOutcome[];
 }
 
+/** Build the {@link JsonProvenance} for one {@link Provenance}. */
 function toJsonProvenance(provenance: Provenance): JsonProvenance {
   return {
     file: provenance.file,
@@ -84,7 +98,8 @@ function toJsonProvenance(provenance: Provenance): JsonProvenance {
   };
 }
 
-function toJsonHook(hook: ResolvedHook): JsonHook {
+/** Build the {@link JsonHook} for one {@link ResolvedHook}. */
+export function toJsonHook(hook: ResolvedHook): JsonHook {
   return {
     event: hook.event,
     matcher: hook.matcher ?? null,
@@ -122,7 +137,7 @@ export function toJsonReport(report: ExplainReport): JsonExplainReport {
 }
 
 /**
- * Render an {@link ExplainReport} as JSON matching `schema/report.schema.json`.
+ * Render an {@link ExplainReport} as JSON matching `schema/explain-report.schema.json`.
  *
  * @remarks
  * The header's `claudeVersion`, `specRange`, and `notices` are carried as

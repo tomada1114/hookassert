@@ -59,16 +59,16 @@ interface JsonLintFinding {
 }
 
 /**
- * The shape `renderLintJson` emits.
+ * The shape `renderLintJson` emits, validated by `schema/lint-report.schema.json`.
  *
  * @remarks
  * `reportVersion` is versioned independently of `explain`'s own
  * `JsonExplainReport` (`report/json.ts`) and `test`'s own `JsonTestReport`
- * (`testReport.ts`) — each currently claims `reportVersion: "1"` for its
- * own, different shape. `reportType` disambiguates the three: unlike
- * `explain`'s `JsonExplainReport`, this shape has no `schema/*.schema.json`
- * of its own yet — a later issue that wants schema-checked `lint` JSON adds
- * one against this documented shape rather than reshaping it silently.
+ * (`testReport.ts`) — see `renderInFormat`'s remark
+ * (`src/internal/report/format.ts`) for the rule that keeps a reshape of
+ * this output, its `reportVersion`, and the schema moving together.
+ * `reportType` disambiguates the three: each currently claims
+ * `reportVersion: "1"` for its own, different shape.
  */
 export interface JsonLintReport {
   readonly reportVersion: "1";
