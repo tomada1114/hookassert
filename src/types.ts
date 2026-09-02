@@ -465,6 +465,28 @@ export type NonFiringExplanation =
     };
 
 /**
+ * The hook whose `Decision` a case's combined verdict came from, and that
+ * `Decision` itself.
+ *
+ * @remarks
+ * When more than one hook fires for a case — the ordinary product of the
+ * three-layer settings merge — `assertCase` folds every firing hook's
+ * `Decision` into one verdict by precedence (`deny` > `unknown` > `error` >
+ * `allow` > `pass`, see `combineDecisions` in
+ * `src/internal/decision/combine.ts`) and names the hook that produced the
+ * winning one here, so a report can point at it rather than leaving a
+ * multi-hook case's verdict unattributed.
+ *
+ * @public
+ */
+export interface DecidingHook {
+  /** The hook whose `Decision` won the fold. */
+  readonly hook: ResolvedHook;
+  /** The case's combined `Decision` — this hook's own, since it is the one that decided. */
+  readonly decision: Decision;
+}
+
+/**
  * The comparison between one fixture case's declared `expect` and what
  * actually happened, produced by `assertCase` (`src/internal/assert/`).
  *
@@ -482,6 +504,8 @@ export type CaseResult =
       readonly kind: "pass";
       /** Where the case's input payload came from. */
       readonly origin: PayloadOrigin;
+      /** The hook whose `Decision` this case's verdict came from; `undefined` when no hook fired at all. */
+      readonly decidedBy: DecidingHook | undefined;
     }
   | {
       /** At least one declared expectation was not met. */
@@ -499,6 +523,8 @@ export type CaseResult =
        * mismatch (on this same result) on a hook that did fire.
        */
       readonly nonFiring: NonFiringExplanation | undefined;
+      /** The hook whose `Decision` this case's verdict came from; `undefined` when no hook fired at all. */
+      readonly decidedBy: DecidingHook | undefined;
     }
   | {
       /**
@@ -512,6 +538,8 @@ export type CaseResult =
       readonly origin: PayloadOrigin;
       /** Every reason nothing more specific could be asserted. */
       readonly reasons: readonly [UnknownReason, ...UnknownReason[]];
+      /** The hook whose `Decision` this case's verdict came from; `undefined` when no hook fired at all. */
+      readonly decidedBy: DecidingHook | undefined;
     }
   | {
       /** The case declared nothing to compare, so it was skipped rather than asserted or left `unknown`. */

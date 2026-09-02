@@ -4,22 +4,26 @@
  *
  * @remarks
  * Static layer: pure comparison — no I/O, no process, no write. This module
- * only consumes a `Decision`, an `ExecOutcome`, and the matcher engine's
- * `MatcherOutcome`s for the case, all of which the caller already obtained;
- * it never resolves a decision or classifies a matcher itself.
+ * consumes a `Decision` per firing hook, an `ExecOutcome` per firing hook,
+ * and the matcher engine's `MatcherOutcome`s for the case, all of which the
+ * caller already obtained; it never resolves a decision or classifies a
+ * matcher itself, and its own `combineDecisions` call
+ * (`src/internal/decision/`) only folds `Decision`s the caller already
+ * resolved rather than resolving one itself.
  */
 
 import type {
   CaseResult,
   Decision,
+  DecidingHook,
   EventName,
-  ExecOutcome,
   ExpectationDiff,
   NonFiringExplanation,
   RejectedMatch,
 } from "../../types.js";
+import { combineDecisions } from "../decision/index.js";
 import type { FixtureCase, FixtureExpectation } from "../fixture/index.js";
-import type { CaseObservation } from "./types.js";
+import type { CaseObservation, FiredHook } from "./types.js";
 
 /** Whether `expect` declares no assertion at all — every field is `undefined`. */
 function isEmptyExpectation(expect: FixtureExpectation): boolean {
@@ -81,18 +85,23 @@ function deriveNonFiring(
 }
 
 /**
- * Every {@link ExpectationDiff} between `expect` and a firing hook's
- * resolved `decision` and `execOutcome`.
+ * Every {@link ExpectationDiff} between `expect` and the case's combined
+ * `decision`, checked against every firing hook's own stream and timeout.
  *
  * @remarks
  * Only called once the caller has already excluded `decision.kind ===
  * "unknown"` — an unresolved decision produces its own `CaseResult.kind ===
- * "unknown"` rather than a `diffs` mismatch.
+ * "unknown"` rather than a `diffs` mismatch. `decision`/`exitCode` are
+ * compared against the combined verdict (`exitCode` is the deciding hook's
+ * own, since that is whose `Decision` won the fold); `stdoutContains`,
+ * `stderrContains`, and `timedOut` are checked against *every* firing hook
+ * — a real Claude Code session shows every hook's output, not only the one
+ * that decided — so any one of them satisfying the expectation is enough.
  */
 function computeFiredDiffs(
   expect: FixtureExpectation,
   decision: Exclude<Decision, { kind: "unknown" }>,
-  execOutcome: ExecOutcome | undefined,
+  fired: readonly [FiredHook, ...FiredHook[]],
 ): ExpectationDiff[] {
   const diffs: ExpectationDiff[] = [];
 
@@ -116,26 +125,32 @@ function computeFiredDiffs(
     });
   }
 
-  const stdout = execOutcome?.stdout ?? "";
-  if (expect.stdoutContains !== undefined && !stdout.includes(expect.stdoutContains)) {
-    diffs.push({
-      field: "stdoutContains",
-      expectedSubstring: expect.stdoutContains,
-      actualStdout: stdout,
-    });
+  if (expect.stdoutContains !== undefined) {
+    const substring = expect.stdoutContains;
+    const matched = fired.some((f) => f.execOutcome.stdout.includes(substring));
+    if (!matched) {
+      diffs.push({
+        field: "stdoutContains",
+        expectedSubstring: substring,
+        actualStdout: fired.map((f) => f.execOutcome.stdout).join("\n"),
+      });
+    }
   }
 
-  const stderr = execOutcome?.stderr ?? "";
-  if (expect.stderrContains !== undefined && !stderr.includes(expect.stderrContains)) {
-    diffs.push({
-      field: "stderrContains",
-      expectedSubstring: expect.stderrContains,
-      actualStderr: stderr,
-    });
+  if (expect.stderrContains !== undefined) {
+    const substring = expect.stderrContains;
+    const matched = fired.some((f) => f.execOutcome.stderr.includes(substring));
+    if (!matched) {
+      diffs.push({
+        field: "stderrContains",
+        expectedSubstring: substring,
+        actualStderr: fired.map((f) => f.execOutcome.stderr).join("\n"),
+      });
+    }
   }
 
   if (expect.timedOut !== undefined) {
-    const actualTimedOut = execOutcome?.timedOut ?? false;
+    const actualTimedOut = fired.some((f) => f.execOutcome.timedOut);
     if (expect.timedOut !== actualTimedOut) {
       diffs.push({
         field: "timedOut",
@@ -146,6 +161,13 @@ function computeFiredDiffs(
   }
 
   return diffs;
+}
+
+/** Type guard narrowing `fired` to a non-empty tuple once its length has been checked. */
+function isNonEmptyFired(
+  fired: readonly FiredHook[],
+): fired is readonly [FiredHook, ...FiredHook[]] {
+  return fired.length > 0;
 }
 
 /**
@@ -159,12 +181,20 @@ function computeFiredDiffs(
  * 2. No hook fired at all: `expect.fires: true` → `"fail"` with
  *    {@link NonFiringExplanation}; otherwise → `"pass"`, since nothing else
  *    was declared to compare against a case that was not expected to fire.
- * 3. A hook fired but its resolved `Decision` could not be asserted with
- *    confidence (`decision.kind === "unknown"`) → `"unknown"`, carrying the
- *    same `reasons` the `Decision` itself carries.
- * 4. A hook fired and its `Decision` resolved with confidence → every
- *    declared `expect` field is compared against what was observed; any
- *    mismatch produces `"fail"` with a non-empty `diffs`, otherwise
+ * 3. One or more hooks fired: every firing hook's own `Decision` is folded
+ *    into one combined verdict by `combineDecisions`
+ *    (`deny` > `unknown` > `error` > `allow` > `pass` — any deny wins,
+ *    regardless of which hook produced it or how many others fired), and
+ *    the hook that produced the winning `Decision` is recorded as
+ *    `decidedBy` on every branch below.
+ * 4. The combined `Decision` could not be asserted with confidence
+ *    (`decision.kind === "unknown"`) → `"unknown"`, carrying the same
+ *    `reasons` that `Decision` itself carries.
+ * 5. The combined `Decision` resolved with confidence → every declared
+ *    `expect` field is compared against what was observed (`decision`/
+ *    `exitCode` against the combined verdict, `stdoutContains`/
+ *    `stderrContains`/`timedOut` against every firing hook's own stream);
+ *    any mismatch produces `"fail"` with a non-empty `diffs`, otherwise
  *    `"pass"`.
  */
 export function assertCase(
@@ -180,26 +210,41 @@ export function assertCase(
     return { kind: "skipped", origin, reason: "stub-only" };
   }
 
-  if (observation.decision === undefined) {
+  const { fired } = observation;
+  if (!isNonEmptyFired(fired)) {
     if (caseData.expect.fires === true) {
       return {
         kind: "fail",
         origin,
         diffs: [],
         nonFiring: deriveNonFiring(caseData.event, observation),
+        decidedBy: undefined,
       };
     }
-    return { kind: "pass", origin };
+    return { kind: "pass", origin, decidedBy: undefined };
   }
 
-  const { decision } = observation;
-  if (decision.kind === "unknown") {
-    return { kind: "unknown", origin, reasons: decision.reasons };
+  const decisions: readonly [Decision, ...Decision[]] = [
+    fired[0].decision,
+    ...fired.slice(1).map((f) => f.decision),
+  ];
+  const combined = combineDecisions(decisions);
+  // combined.index is always a valid index into `fired` — combineDecisions
+  // picks it from `decisions`, built 1:1 with `fired` above — but a dynamic
+  // numeric index into an array still types as possibly undefined under
+  // noUncheckedIndexedAccess; `fired[0]` is the unreachable-in-practice
+  // fallback, itself guaranteed present by the tuple type `fired` narrowed
+  // to above.
+  const decidingHook = (fired[combined.index] ?? fired[0]).hook;
+  const decidedBy: DecidingHook = { hook: decidingHook, decision: combined.decision };
+
+  if (combined.decision.kind === "unknown") {
+    return { kind: "unknown", origin, reasons: combined.decision.reasons, decidedBy };
   }
 
-  const diffs = computeFiredDiffs(caseData.expect, decision, observation.execOutcome);
+  const diffs = computeFiredDiffs(caseData.expect, combined.decision, fired);
   if (diffs.length > 0) {
-    return { kind: "fail", origin, diffs, nonFiring: undefined };
+    return { kind: "fail", origin, diffs, nonFiring: undefined, decidedBy };
   }
-  return { kind: "pass", origin };
+  return { kind: "pass", origin, decidedBy };
 }

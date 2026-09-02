@@ -13,4 +13,4 @@
 
 export { assertCase, isStubOnly } from "./assertCase.js";
 export { summarize } from "./summarize.js";
-export type { CaseObservation } from "./types.js";
+export type { CaseObservation, FiredHook } from "./types.js";

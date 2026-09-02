@@ -22,6 +22,7 @@
 export type {
   CaseResult,
   Decision,
+  DecidingHook,
   EventName,
   ExecOutcome,
   ExpectationDiff,
