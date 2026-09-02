@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   allowed,
+  combineDecisions,
   denied,
   errored,
   exit2OverridesAllowJson,
@@ -536,5 +537,102 @@ describe("factory functions build exactly the Decision shape they name", () => {
       exitCode: 127,
       cause: "nonzero-exit-without-json",
     });
+  });
+});
+
+describe("combineDecisions", () => {
+  /** The precedence table combineDecisions is documented to implement: deny > unknown > error > allow > pass. */
+  const KINDS = ["deny", "unknown", "error", "allow", "pass"] as const;
+  type Kind = (typeof KINDS)[number];
+  const PRECEDENCE: Readonly<Record<Kind, number>> = {
+    deny: 0,
+    unknown: 1,
+    error: 2,
+    allow: 3,
+    pass: 4,
+  };
+
+  /** One representative `Decision` of the given `kind`, distinguishable by more than just `kind`. */
+  function sample(kind: Kind): Decision {
+    switch (kind) {
+      case "deny":
+        return denied("exit-code", 2);
+      case "unknown":
+        return unknownDecision({ kind: "plugin-hooks-present", files: [] });
+      case "error":
+        return errored(1, "nonzero-exit-without-json");
+      case "allow":
+        return allowed(0);
+      case "pass":
+        return passed(0);
+    }
+  }
+
+  const everyOrderedPair = KINDS.flatMap((first) =>
+    KINDS.map((second) => [first, second] as const),
+  );
+
+  it.each(everyOrderedPair)(
+    "(%s, %s): the higher-precedence kind wins; the first hook wins a tie",
+    (firstKind, secondKind) => {
+      const decisions: readonly [Decision, ...Decision[]] = [
+        sample(firstKind),
+        sample(secondKind),
+      ];
+
+      const result = combineDecisions(decisions);
+
+      const expectedIndex = PRECEDENCE[firstKind] <= PRECEDENCE[secondKind] ? 0 : 1;
+      expect(result.index).toBe(expectedIndex);
+      expect(result.decision).toEqual(decisions[expectedIndex]);
+    },
+  );
+
+  it("a single-decision tuple returns that decision at index 0", () => {
+    const decision = sample("allow");
+
+    expect(combineDecisions([decision])).toEqual({ decision, index: 0 });
+  });
+
+  it("the full precedence order holds with all five kinds firing at once, regardless of firing order", () => {
+    const ascending: readonly [Decision, ...Decision[]] = [
+      sample("pass"),
+      sample("allow"),
+      sample("error"),
+      sample("unknown"),
+      sample("deny"),
+    ];
+    expect(combineDecisions(ascending)).toEqual({ decision: sample("deny"), index: 4 });
+
+    const descending: readonly [Decision, ...Decision[]] = [
+      sample("deny"),
+      sample("unknown"),
+      sample("error"),
+      sample("allow"),
+      sample("pass"),
+    ];
+    expect(combineDecisions(descending)).toEqual({
+      decision: sample("deny"),
+      index: 0,
+    });
+
+    const shuffled: readonly [Decision, ...Decision[]] = [
+      sample("error"),
+      sample("pass"),
+      sample("deny"),
+      sample("allow"),
+      sample("unknown"),
+    ];
+    expect(combineDecisions(shuffled)).toEqual({ decision: sample("deny"), index: 2 });
+  });
+
+  it("three hooks tied on the same kind resolve to the first one's index", () => {
+    const decisions: readonly [Decision, ...Decision[]] = [
+      sample("error"),
+      sample("error"),
+      sample("error"),
+    ];
+
+    expect(combineDecisions(decisions).index).toBe(0);
   });
 });
