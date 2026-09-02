@@ -24,5 +24,11 @@ export type {
   StderrDestination,
 } from "./types.js";
 export { loadSpec, loadSpecFile } from "./load.js";
-export { isInDeclaredRange, meetsSinceVersion, parseClaudeVersion } from "./version.js";
+export {
+  CLAUDE_CODE_RANGE_PATTERN,
+  CLAUDE_VERSION_PATTERN,
+  isInDeclaredRange,
+  meetsSinceVersion,
+  parseClaudeVersion,
+} from "./version.js";
 export type { ClaudeVersion } from "./version.js";

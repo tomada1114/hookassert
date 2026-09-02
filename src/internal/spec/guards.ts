@@ -13,6 +13,8 @@
  * `isValidSpec` is the boolean type guard built on top of it.
  */
 
+import { CLAUDE_CODE_RANGE_PATTERN, CLAUDE_VERSION_PATTERN } from "./version.js";
+
 import type { ExitCodeEffectKind, Spec, StderrDestination } from "./types.js";
 
 const EXIT_CODE_EFFECT_KINDS: readonly ExitCodeEffectKind[] = [
@@ -105,6 +107,53 @@ function checkObjectShape(
     violations.add(path, `unrecognized property "${key}"`);
   }
   return true;
+}
+
+/**
+ * Flags a `major.minor.patch`-shaped field (`sinceVersion`) that fails
+ * {@link CLAUDE_VERSION_PATTERN}. No-op when `value` is not already a non-empty
+ * string — that shape violation is reported by the caller.
+ */
+function checkVersionPattern(
+  violations: Violations,
+  path: string,
+  value: unknown,
+): void {
+  if (typeof value !== "string" || value.length === 0) {
+    return;
+  }
+  if (!CLAUDE_VERSION_PATTERN.test(value)) {
+    violations.add(path, "must be a major.minor.patch Claude Code version");
+  }
+}
+
+/**
+ * Flags a matcher-syntax pattern field (`exactListPattern`,
+ * `narrowExactListPattern`) that does not compile as a JavaScript regular
+ * expression.
+ *
+ * @remarks
+ * JSON Schema draft-07 cannot express this without `format: "regex"`, which
+ * would require the `ajv-formats` dependency this repository deliberately
+ * does not add (see `managing-dependencies`) — so `schema/spec.schema.json`
+ * cannot check this, and this guard is deliberately stricter than the schema
+ * here. No-op when `value` is not already a non-empty string — that shape
+ * violation is reported by the caller.
+ */
+function checkCompilableRegex(
+  violations: Violations,
+  path: string,
+  value: unknown,
+): void {
+  if (typeof value !== "string" || value.length === 0) {
+    return;
+  }
+  try {
+    new RegExp(value);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    violations.add(path, `must be a valid JavaScript regular expression: ${reason}`);
+  }
 }
 
 function checkMatcherTargets(
@@ -272,6 +321,8 @@ function checkMatcherRule(violations: Violations, path: string, value: unknown):
   }
   if (typeof value["sinceVersion"] !== "string" || value["sinceVersion"].length === 0) {
     violations.add(`${path}.sinceVersion`, "must be a non-empty string");
+  } else {
+    checkVersionPattern(violations, `${path}.sinceVersion`, value["sinceVersion"]);
   }
 }
 
@@ -299,6 +350,12 @@ function checkMatcherSyntax(
     value["exactListPattern"].length === 0
   ) {
     violations.add(`${path}.exactListPattern`, "must be a non-empty string");
+  } else {
+    checkCompilableRegex(
+      violations,
+      `${path}.exactListPattern`,
+      value["exactListPattern"],
+    );
   }
   if (!isNonEmptyStringArray(value["narrowExactMatchEvents"])) {
     violations.add(
@@ -311,6 +368,12 @@ function checkMatcherSyntax(
     value["narrowExactListPattern"].length === 0
   ) {
     violations.add(`${path}.narrowExactListPattern`, "must be a non-empty string");
+  } else {
+    checkCompilableRegex(
+      violations,
+      `${path}.narrowExactListPattern`,
+      value["narrowExactListPattern"],
+    );
   }
   const rules = value["rules"];
   if (!Array.isArray(rules)) {
@@ -398,6 +461,8 @@ function checkMatcherTableRow(
   const sinceVersion = value["sinceVersion"];
   if (sinceVersion !== null && typeof sinceVersion !== "string") {
     violations.add(`${path}.sinceVersion`, "must be a string or null");
+  } else if (typeof sinceVersion === "string") {
+    checkVersionPattern(violations, `${path}.sinceVersion`, sinceVersion);
   }
 }
 
@@ -431,6 +496,12 @@ export function validateSpec(value: unknown): readonly string[] {
     value["claudeCodeRange"].length === 0
   ) {
     violations.add("$.claudeCodeRange", "must be a non-empty string");
+  } else if (!CLAUDE_CODE_RANGE_PATTERN.test(value["claudeCodeRange"])) {
+    violations.add(
+      "$.claudeCodeRange",
+      "must be a space-separated list of (>=|<=|>|<|=)major.minor.patch clauses " +
+        '(the npm range operators "^", "~", "x", and "||" are not supported)',
+    );
   }
   checkDefaults(violations, "$.defaults", value["defaults"]);
   checkHookEnv(violations, "$.hookEnv", value["hookEnv"]);
