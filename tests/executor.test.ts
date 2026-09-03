@@ -432,35 +432,56 @@ describe("timeout", () => {
     const [result] = await executeHooks(deps, makePlan([makeStep(hook)]));
     const elapsedMs = Date.now() - startedAt;
 
-    expect(result?.outcome.timedOut).toBe(true);
-    // `NodeSpawner` settles from the timer callback itself (see its own
-    // remark), never by waiting for "close" — a spawner that regressed to
-    // waiting for the grandchild's own exit would take ~`marker` seconds
-    // instead of ~`hookTimeoutMs`. The bound below is not an unrelated
-    // hand-picked wall-clock figure: it is a generous multiple of the
-    // hook's own declared deadline, wide enough to absorb the scheduling
-    // delay a CPU-starved machine can add on top of process-spawn and
-    // timer-callback latency (this suite measured a single synchronous
-    // `pgrep` spawn taking over 1s, versus ~150ms idle, under deliberate
-    // three-way CPU contention — see issue #66), while staying far under
-    // the multi-second `marker` a "still waiting for close" regression
-    // would actually take.
-    expect(elapsedMs).toBeLessThan(hookTimeoutMs * 20);
+    try {
+      expect(result?.outcome.timedOut).toBe(true);
+      // `NodeSpawner` settles from the timer callback itself (see its own
+      // remark), never by waiting for "close" — a spawner that regressed to
+      // waiting for the grandchild's own exit would take ~`marker` seconds
+      // (>= 15s) instead of ~`hookTimeoutMs`. The bound below is not an
+      // unrelated hand-picked wall-clock figure: it is a generous multiple
+      // of the hook's own declared deadline, wide enough to absorb the
+      // scheduling delay a CPU-starved machine can add on top of
+      // process-spawn and timer-callback latency (this suite measured a
+      // single synchronous `pgrep` spawn taking over 1s, versus ~150ms
+      // idle, under deliberate three-way CPU contention — see issue #66).
+      // 40x (8000ms) keeps that margin without costing any discriminating
+      // power: it is still far under the >= 15s a "still waiting for
+      // close" regression would actually take, so widening it only makes
+      // the test more tolerant of contention, never less able to catch the
+      // regression it guards against.
+      expect(elapsedMs).toBeLessThan(hookTimeoutMs * 40);
 
-    // Poll for the grandchild's actual disappearance instead of sleeping a
-    // fixed amount and checking once: under CPU contention, `pgrep` itself
-    // (a synchronous spawn) can take over a second just to run, which a
-    // fixed pre-sleep cannot budget for in advance. The outer bound is
-    // generous because this loop only ever runs for its full length on an
-    // actual orphan-process regression, never on ordinary scheduling
-    // jitter.
-    const pollDeadline = Date.now() + 10_000;
-    let stillRunning = spawnSync("pgrep", ["-f", `sleep ${marker}`]);
-    while (stillRunning.status === 0 && Date.now() < pollDeadline) {
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      stillRunning = spawnSync("pgrep", ["-f", `sleep ${marker}`]);
+      // Poll for the grandchild's actual disappearance instead of sleeping
+      // a fixed amount and checking once: under CPU contention, `pgrep`
+      // itself (a synchronous spawn) can take over a second just to run,
+      // which a fixed pre-sleep cannot budget for in advance. The outer
+      // bound is generous because this loop only ever runs for its full
+      // length on an actual orphan-process regression, never on ordinary
+      // scheduling jitter. A failed spawn (`error` set, `status: null` —
+      // EAGAIN/ENOMEM under fork pressure, or `pgrep` missing) breaks the
+      // loop immediately rather than being read as "no match", so it fails
+      // the assertions below instead of silently passing.
+      const pollDeadline = Date.now() + 10_000;
+      let stillRunning = spawnSync("pgrep", ["-f", `sleep ${marker}`]);
+      while (
+        stillRunning.error === undefined &&
+        stillRunning.status === 0 &&
+        Date.now() < pollDeadline
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        stillRunning = spawnSync("pgrep", ["-f", `sleep ${marker}`]);
+      }
+      expect(stillRunning.error).toBeUndefined();
+      // pgrep's documented exit status for "no process matched" — anything
+      // else (a still-running match, or pgrep's own status 2/3 for a usage
+      // or fatal error) must fail this test rather than pass it.
+      expect(stillRunning.status).toBe(1);
+    } finally {
+      // Clean up the survivor on the failure path too: an actual kill
+      // regression must not leave a `sleep ${marker}` process outliving
+      // this test's own run just because an assertion above threw first.
+      spawnSync("pkill", ["-f", `sleep ${marker}`]);
     }
-    expect(stillRunning.status).not.toBe(0);
   });
 });
 
