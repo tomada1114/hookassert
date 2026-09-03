@@ -415,12 +415,16 @@ describe("timeout", () => {
     // The sleep duration itself doubles as a unique marker: pgrep -f can
     // then confirm afterward that no process still matches this exact
     // command line, i.e. the whole process group was actually killed rather
-    // than only the direct `sh` child.
-    const marker = (5 + Math.random()).toFixed(4);
+    // than only the direct `sh` child. It is deliberately far longer than
+    // hookTimeoutMs (below) needs any margin against, so the assertions
+    // below can both stay generous and still prove the promise settled from
+    // the timer path rather than from waiting on the grandchild's own exit.
+    const marker = (15 + Math.random() * 5).toFixed(4);
+    const hookTimeoutMs = 200;
     const hook = makeHook({
       command: `echo start; sleep ${marker}`,
       args: undefined,
-      timeoutMs: 200,
+      timeoutMs: hookTimeoutMs,
     });
     const deps = makeDeps({ spawner: new NodeSpawner() });
 
@@ -429,14 +433,33 @@ describe("timeout", () => {
     const elapsedMs = Date.now() - startedAt;
 
     expect(result?.outcome.timedOut).toBe(true);
-    // Comfortably under the 5+ second sleep, with headroom for process
-    // teardown; a spawner that only waits for "close" resolves near 5000ms.
-    expect(elapsedMs).toBeLessThan(2000);
+    // `NodeSpawner` settles from the timer callback itself (see its own
+    // remark), never by waiting for "close" — a spawner that regressed to
+    // waiting for the grandchild's own exit would take ~`marker` seconds
+    // instead of ~`hookTimeoutMs`. The bound below is not an unrelated
+    // hand-picked wall-clock figure: it is a generous multiple of the
+    // hook's own declared deadline, wide enough to absorb the scheduling
+    // delay a CPU-starved machine can add on top of process-spawn and
+    // timer-callback latency (this suite measured a single synchronous
+    // `pgrep` spawn taking over 1s, versus ~150ms idle, under deliberate
+    // three-way CPU contention — see issue #66), while staying far under
+    // the multi-second `marker` a "still waiting for close" regression
+    // would actually take.
+    expect(elapsedMs).toBeLessThan(hookTimeoutMs * 20);
 
-    // Give the OS a moment to finish reaping the killed processes before
-    // checking that none of them survived as an orphan.
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    const stillRunning = spawnSync("pgrep", ["-f", `sleep ${marker}`]);
+    // Poll for the grandchild's actual disappearance instead of sleeping a
+    // fixed amount and checking once: under CPU contention, `pgrep` itself
+    // (a synchronous spawn) can take over a second just to run, which a
+    // fixed pre-sleep cannot budget for in advance. The outer bound is
+    // generous because this loop only ever runs for its full length on an
+    // actual orphan-process regression, never on ordinary scheduling
+    // jitter.
+    const pollDeadline = Date.now() + 10_000;
+    let stillRunning = spawnSync("pgrep", ["-f", `sleep ${marker}`]);
+    while (stillRunning.status === 0 && Date.now() < pollDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      stillRunning = spawnSync("pgrep", ["-f", `sleep ${marker}`]);
+    }
     expect(stillRunning.status).not.toBe(0);
   });
 });
