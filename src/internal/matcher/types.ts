@@ -36,9 +36,11 @@ export type VersionContext =
  * with confidence.
  *
  * @remarks
- * - `"exact-list"` — the matcher is a comma/pipe-delimited list of exact,
- *   case-sensitive values.
+ * - `"exact-list"` — the matcher is a comma/pipe-delimited list of exact
+ *   values, compared case-sensitively or not per
+ *   `spec.matcherSyntax.caseSensitive`.
  * - `"unanchored-regex"` — the matcher is tested as `new RegExp(matcher)`
+ *   (with an `"i"` flag when `spec.matcherSyntax.caseSensitive` is `false`)
  *   with no implicit `^`/`$` added, so it can match a substring of a longer
  *   name (`"Edit.*"` matching `"NotebookEdit"` is the documented, real
  *   Claude Code behavior this reproduces, not a bug).
