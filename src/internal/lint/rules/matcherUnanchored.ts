@@ -131,16 +131,34 @@ function alternationBranches(matcher: string): readonly string[] | undefined {
   return branches;
 }
 
-/** `new RegExp(matcher).test(tool)`, with `matcher/match.ts`'s own tolerance for `"*"` and an uncompilable pattern. */
-function testRegexSafe(matcher: string, tool: string): boolean {
+/**
+ * `new RegExp(matcher, caseSensitive ? undefined : "i").test(tool)`, mirroring
+ * `matcher/match.ts`'s own `testUnanchoredRegex` — including its tolerance
+ * for `"*"` and an uncompilable pattern, and its `"i"` flag when
+ * `spec.matcherSyntax.caseSensitive` is `false`.
+ */
+function testRegexSafe(matcher: string, tool: string, caseSensitive: boolean): boolean {
   if (matcher === "*") {
     return true;
   }
   try {
-    return new RegExp(matcher).test(tool);
+    return new RegExp(matcher, caseSensitive ? undefined : "i").test(tool);
   } catch {
     return false;
   }
+}
+
+/** Whether `items` contains `tool`, honoring `spec.matcherSyntax.caseSensitive` the same way `matcher/match.ts`'s `exactListIncludes` does. */
+function includesTool(
+  items: readonly string[],
+  tool: string,
+  caseSensitive: boolean,
+): boolean {
+  if (caseSensitive) {
+    return items.includes(tool);
+  }
+  const lowerTool = tool.toLowerCase();
+  return items.some((item) => item.toLowerCase() === lowerTool);
 }
 
 export const matcherUnanchoredRule: LintRule = {
@@ -164,15 +182,18 @@ export const matcherUnanchoredRule: LintRule = {
         continue;
       }
 
+      const caseSensitive = ctx.spec.matcherSyntax.caseSensitive;
       const matched = ctx.spec.knownTools.filter((tool) =>
-        testRegexSafe(matcher, tool),
+        testRegexSafe(matcher, tool, caseSensitive),
       );
       if (matched.length <= 1) {
         continue;
       }
       const branches = alternationBranches(matcher);
       const intended = branches ?? [literalPrefix(matcher)];
-      const unintended = matched.filter((tool) => !intended.includes(tool));
+      const unintended = matched.filter(
+        (tool) => !includesTool(intended, tool, caseSensitive),
+      );
       if (unintended.length === 0) {
         continue;
       }

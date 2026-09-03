@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -23,12 +24,37 @@ import {
   type LintReport,
 } from "../src/internal/report/index.js";
 import type { SettingsSource } from "../src/internal/settings/index.js";
-import { loadSpecFile, parseClaudeVersion } from "../src/internal/spec/index.js";
+import {
+  loadSpec,
+  loadSpecFile,
+  parseClaudeVersion,
+} from "../src/internal/spec/index.js";
 import type { Spec } from "../src/internal/spec/index.js";
 
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
 const REAL_SPEC_PATH = path.join(REPO_ROOT, "spec", "claude-code-2.1.251-2.2.0.json");
 const REAL_SPEC: Spec = loadSpecFile(REAL_SPEC_PATH);
+const SPEC_FIXTURES_DIR = fileURLToPath(new URL("./fixtures/spec/", import.meta.url));
+
+function readJson(file: string): unknown {
+  return JSON.parse(readFileSync(file, "utf8")) as unknown;
+}
+
+/**
+ * `valid-minimal.json` mutated to `caseSensitive: false` — mirrors
+ * `tests/matcher.test.ts`'s own `specWithCaseSensitive`. Its `knownTools`
+ * (`Bash`, `Edit`, `Write`, `NotebookEdit`, …) and its `PreToolUse` event
+ * (`matcherTargets.kind: "tool-name"`) are exactly what `matcher-case` and
+ * `matcher-unanchored` need.
+ */
+const CASE_INSENSITIVE_SPEC: Spec = (() => {
+  const raw = readJson(path.join(SPEC_FIXTURES_DIR, "valid-minimal.json")) as Record<
+    string,
+    unknown
+  >;
+  (raw["matcherSyntax"] as Record<string, unknown>)["caseSensitive"] = false;
+  return loadSpec(raw, "synthetic-lint-caseSensitive-false");
+})();
 
 /**
  * The real spec's own `claudeCodeRange` (`">=2.1.251 <2.2.0"`) starts past
@@ -447,6 +473,59 @@ describe("matcher-unanchored", () => {
     const [finding] = rule.run(unanchoredCtx("Edit|Write.*"));
 
     expect(finding?.suggestion).toContain('"^(?:Edit|Write.*)$"');
+  });
+});
+
+describe("spec.matcherSyntax.caseSensitive: honored by matcher-case and matcher-unanchored", () => {
+  function caseCtx(spec: Spec, matcher: string): LintContext {
+    return {
+      spec,
+      versionContext: UNDETERMINED,
+      groups: [
+        {
+          file: "/fake/settings.json",
+          layer: "project",
+          event: "PreToolUse",
+          line: 1,
+          matcher: { kind: "string", value: matcher },
+        },
+      ],
+      commands: [],
+      projectRoot: REPO_ROOT,
+      pathEnv: undefined,
+      homeDir: undefined,
+    };
+  }
+
+  it('matcher-case: reports nothing for "bash" vs Bash under a caseSensitive: false spec', () => {
+    const findings = ruleById("matcher-case").run(
+      caseCtx(CASE_INSENSITIVE_SPEC, "bash"),
+    );
+    expect(findings).toEqual([]);
+  });
+
+  it('matcher-case: still reports the mismatch for "bash" vs Bash under the shipped (case-sensitive) spec', () => {
+    const findings = ruleById("matcher-case").run(caseCtx(REAL_SPEC, "bash"));
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.ruleId).toBe("matcher-case");
+  });
+
+  it('matcher-unanchored: "edit.*" still reports the genuine NotebookEdit over-match under a caseSensitive: false spec', () => {
+    const [finding] = ruleById("matcher-unanchored").run(
+      caseCtx(CASE_INSENSITIVE_SPEC, "edit.*"),
+    );
+
+    expect(finding?.message).toContain("NotebookEdit");
+  });
+
+  it('matcher-unanchored: "(edit|write)" does not misreport its own branches as unintended under a caseSensitive: false spec', () => {
+    const [finding] = ruleById("matcher-unanchored").run(
+      caseCtx(CASE_INSENSITIVE_SPEC, "(edit|write)"),
+    );
+
+    expect(finding?.message).toContain("NotebookEdit");
+    expect(finding?.message).not.toContain('"Edit"');
+    expect(finding?.message).not.toContain('"Write"');
   });
 });
 
