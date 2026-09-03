@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -9,12 +10,25 @@ import {
   matchHooks,
 } from "../src/internal/matcher/index.js";
 import type { MatchRequest, VersionContext } from "../src/internal/matcher/index.js";
-import { loadSpecFile, parseClaudeVersion } from "../src/internal/spec/index.js";
+import {
+  loadSpec,
+  loadSpecFile,
+  parseClaudeVersion,
+} from "../src/internal/spec/index.js";
 import type { Spec } from "../src/internal/spec/index.js";
 import type { EventName, Provenance, ResolvedHook } from "../src/types.js";
 
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
 const REAL_SPEC_PATH = path.join(REPO_ROOT, "spec", "claude-code-2.1.251-2.2.0.json");
+const FIXTURES_DIR = fileURLToPath(new URL("./fixtures/spec/", import.meta.url));
+
+function fixturePath(file: string): string {
+  return path.join(FIXTURES_DIR, file);
+}
+
+function readJson(file: string): unknown {
+  return JSON.parse(readFileSync(file, "utf8")) as unknown;
+}
 
 const REAL_SPEC: Spec = loadSpecFile(REAL_SPEC_PATH);
 
@@ -312,6 +326,77 @@ describe("MatcherOutcome: why a hook did not fire", () => {
       requestFor("PreToolUse", hook, "Bash"),
     );
     expect(result.firing).toEqual([]);
+    expect(result.rejected).toEqual([]);
+  });
+});
+
+describe("spec.matcherSyntax.caseSensitive: honored on both matching paths", () => {
+  /**
+   * `valid-minimal.json` mutated to `caseSensitive: false` — `classify.ts`'s
+   * character-class checks are unaffected by the flag, only the comparison
+   * `match.ts` performs once a matcher is classified.
+   */
+  function specWithCaseSensitive(caseSensitive: boolean): Spec {
+    const raw = readJson(fixturePath("valid-minimal.json")) as Record<string, unknown>;
+    (raw["matcherSyntax"] as Record<string, unknown>)["caseSensitive"] = caseSensitive;
+    return loadSpec(raw, `synthetic-caseSensitive-${String(caseSensitive)}`);
+  }
+
+  const CASE_SENSITIVE_SPEC = specWithCaseSensitive(true);
+  const CASE_INSENSITIVE_SPEC = specWithCaseSensitive(false);
+
+  it("exact-list path: bash fires for Bash when caseSensitive is false", () => {
+    const hook = makeHook("PreToolUse", "bash");
+    const result = matchHooks(
+      CASE_INSENSITIVE_SPEC,
+      IN_RANGE_VERSION,
+      requestFor("PreToolUse", hook, "Bash"),
+    );
+    expect(result.firing).toEqual([hook]);
+    expect(result.rejected).toEqual([]);
+  });
+
+  it("exact-list path: bash does not fire for Bash under the shipped (case-sensitive) spec", () => {
+    const hook = makeHook("PreToolUse", "bash");
+    const result = matchHooks(
+      CASE_SENSITIVE_SPEC,
+      IN_RANGE_VERSION,
+      requestFor("PreToolUse", hook, "Bash"),
+    );
+    expect(result.firing).toEqual([]);
+    expect(result.rejected).toHaveLength(1);
+  });
+
+  it("regex path: edit.* fires for NotebookEdit when caseSensitive is false", () => {
+    const hook = makeHook("PreToolUse", "edit.*");
+    const result = matchHooks(
+      CASE_INSENSITIVE_SPEC,
+      IN_RANGE_VERSION,
+      requestFor("PreToolUse", hook, "NotebookEdit"),
+    );
+    expect(result.firing).toEqual([hook]);
+    expect(result.rejected).toEqual([]);
+  });
+
+  it("regex path: edit.* does not fire for NotebookEdit under the shipped (case-sensitive) spec", () => {
+    const hook = makeHook("PreToolUse", "edit.*");
+    const result = matchHooks(
+      CASE_SENSITIVE_SPEC,
+      IN_RANGE_VERSION,
+      requestFor("PreToolUse", hook, "NotebookEdit"),
+    );
+    expect(result.firing).toEqual([]);
+    expect(result.rejected).toHaveLength(1);
+  });
+
+  it("the * wildcard still matches everything regardless of caseSensitive", () => {
+    const hook = makeHook("PreToolUse", "*");
+    const result = matchHooks(
+      CASE_INSENSITIVE_SPEC,
+      IN_RANGE_VERSION,
+      requestFor("PreToolUse", hook, "Bash"),
+    );
+    expect(result.firing).toEqual([hook]);
     expect(result.rejected).toEqual([]);
   });
 });

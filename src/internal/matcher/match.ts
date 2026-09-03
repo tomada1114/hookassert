@@ -28,7 +28,25 @@ function exactListItems(matcher: string): readonly string[] {
 }
 
 /**
- * Test `matcher` as an unanchored regular expression against `target`.
+ * Whether `matcher`'s exact-match list contains `target`, honoring
+ * `spec.matcherSyntax.caseSensitive`.
+ */
+function exactListIncludes(
+  matcher: string,
+  target: string,
+  caseSensitive: boolean,
+): boolean {
+  const items = exactListItems(matcher);
+  if (caseSensitive) {
+    return items.includes(target);
+  }
+  const lowerTarget = target.toLowerCase();
+  return items.some((item) => item.toLowerCase() === lowerTarget);
+}
+
+/**
+ * Test `matcher` as an unanchored regular expression against `target`,
+ * honoring `spec.matcherSyntax.caseSensitive`.
  *
  * @remarks
  * `"*"` is Claude Code's documented "match everything" wildcard and is
@@ -45,12 +63,16 @@ function exactListItems(matcher: string): readonly string[] {
  * aborting every other hook's evaluation; `lint-matcher`'s later issue is
  * where that gets surfaced as a finding instead of swallowed here.
  */
-function testUnanchoredRegex(matcher: string, target: string): boolean {
+function testUnanchoredRegex(
+  matcher: string,
+  target: string,
+  caseSensitive: boolean,
+): boolean {
   if (matcher === "*") {
     return true;
   }
   try {
-    return new RegExp(matcher).test(target);
+    return new RegExp(matcher, caseSensitive ? undefined : "i").test(target);
   } catch {
     return false;
   }
@@ -130,7 +152,10 @@ export function matchHooks(
         break;
       }
       case "exact-list": {
-        if (req.target !== undefined && exactListItems(matcher).includes(req.target)) {
+        if (
+          req.target !== undefined &&
+          exactListIncludes(matcher, req.target, spec.matcherSyntax.caseSensitive)
+        ) {
           firing.push(hook);
         } else {
           rejected.push(exactListOutcome(hook, req.target));
@@ -138,7 +163,10 @@ export function matchHooks(
         break;
       }
       case "unanchored-regex": {
-        if (req.target !== undefined && testUnanchoredRegex(matcher, req.target)) {
+        if (
+          req.target !== undefined &&
+          testUnanchoredRegex(matcher, req.target, spec.matcherSyntax.caseSensitive)
+        ) {
           firing.push(hook);
         } else {
           rejected.push(unanchoredRegexOutcome(hook));
