@@ -675,6 +675,51 @@ describe("assertCase: non-firing explanations", () => {
   });
 });
 
+describe("assertCase: no hook fired at all (issue #68)", () => {
+  it("expect.fires: false passes when nothing fires — the explicit opt-out", () => {
+    const caseData = makeCase({ expect: makeExpect({ fires: false }) });
+
+    const result = expectPass(assertCase(caseData, makeObservation()));
+
+    expect(result.decidedBy).toBeUndefined();
+  });
+
+  it("a wholly empty expect still passes when nothing fires — nothing was declared to compare", () => {
+    const caseData = makeCase();
+
+    const result = expectPass(assertCase(caseData, makeObservation()));
+
+    expect(result.decidedBy).toBeUndefined();
+  });
+
+  // Pinned per field, per issue #68's completion checklist: declaring any
+  // one of these on its own, with nothing firing, must fail rather than
+  // pass by default — the declared expectation could not possibly have
+  // been observed. `fires: false` is deliberately excluded from this list;
+  // it is the one field that passes on its own, covered above.
+  it.each([
+    ["fires", makeExpect({ fires: true })],
+    ["decision", makeExpect({ decision: "deny" })],
+    ["exitCode", makeExpect({ exitCode: 2 })],
+    ["stdoutContains", makeExpect({ stdoutContains: "blocked" })],
+    ["stderrContains", makeExpect({ stderrContains: "reason" })],
+    ["timedOut", makeExpect({ timedOut: true })],
+    ["context", makeExpect({ context: "extra context for the model" })],
+    ["updatedInput", makeExpect({ updatedInput: { command: "ls" } })],
+  ])(
+    "a case declaring only expect.%s fails with an empty diffs array and nonFiring set when nothing fires",
+    (_field, expectation) => {
+      const caseData = makeCase({ expect: expectation });
+
+      const result = expectFail(assertCase(caseData, makeObservation()));
+
+      expect(result.diffs).toEqual([]);
+      expect(result.nonFiring).toBeDefined();
+      expect(result.decidedBy).toBeUndefined();
+    },
+  );
+});
+
 describe("assertCase: unresolved decisions", () => {
   it("a case whose Decision could not be resolved produces an unknown CaseResult carrying at least one UnknownReason", () => {
     const caseData = makeCase({ expect: makeExpect({ fires: true }) });
