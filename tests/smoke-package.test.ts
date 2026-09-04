@@ -47,6 +47,7 @@ vi.mock("../scripts/lib/node-tools.mjs", async (importOriginal) => {
 
 const {
   checkBinCommands,
+  checkCliFixtureUsage,
   checkDeepImportBlocked,
   checkRequireInterop,
   checkRuntimeImports,
@@ -247,6 +248,124 @@ describe("publicBinCommands and checkBinCommands", () => {
       checkBinCommands(consumer, "fixture-package", { bin: { ".": "./dist/cli.js" } }),
     ).toThrow(/ERR_SMOKE_BIN_INVALID/);
     expect(runNodeMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("checkCliFixtureUsage", () => {
+  it("skips, without spawning anything, when the manifest declares no hookassert bin", () => {
+    const consumer = makeConsumer();
+
+    expect(() =>
+      checkCliFixtureUsage(consumer, "fixture-package", { bin: { other: "./x.js" } }),
+    ).not.toThrow();
+    expect(runNodeMock).not.toHaveBeenCalled();
+  });
+
+  const explainJsonWithFiring = JSON.stringify({
+    firing: [{ command: "echo hookassert-smoke-ok" }],
+    rejected: [],
+  });
+
+  it("writes a one-hook fixture and runs explain then lint against it, isolated from the real HOME", () => {
+    runNodeMock.mockReturnValue({
+      status: 0,
+      stdout: explainJsonWithFiring,
+      stderr: "",
+    });
+    const consumer = makeConsumer();
+
+    checkCliFixtureUsage(consumer, "hookassert", {
+      bin: { hookassert: "./dist/cli.js" },
+    });
+
+    const projectDir = path.join(consumer, "fixture-project");
+    const settingsPath = path.join(projectDir, "settings.json");
+    expect(JSON.parse(readFileSync(settingsPath, "utf8")) as unknown).toMatchObject({
+      hooks: {
+        PreToolUse: [
+          {
+            matcher: "Bash",
+            hooks: [{ type: "command", command: "echo hookassert-smoke-ok" }],
+          },
+        ],
+      },
+    });
+
+    const scratchHome = path.join(consumer, "smoke-home");
+    const executable = path.join(consumer, "node_modules", ".bin", "hookassert");
+    expect(runNodeMock).toHaveBeenNthCalledWith(
+      1,
+      executable,
+      ["explain", "PreToolUse", "Bash", "--settings", settingsPath, "--format", "json"],
+      expect.objectContaining({
+        cwd: projectDir,
+        env: expect.objectContaining({
+          HOME: scratchHome,
+          USERPROFILE: scratchHome,
+        }) as unknown,
+      }),
+    );
+    expect(runNodeMock).toHaveBeenNthCalledWith(
+      2,
+      executable,
+      ["lint", "--settings", settingsPath],
+      expect.objectContaining({
+        cwd: projectDir,
+        env: expect.objectContaining({
+          HOME: scratchHome,
+          USERPROFILE: scratchHome,
+        }) as unknown,
+      }),
+    );
+  });
+
+  it("throws ERR_SMOKE_CLI_EXPLAIN_FAILED when explain fails", () => {
+    runNodeMock.mockReturnValue({ status: 1, stdout: "", stderr: "boom" });
+    const consumer = makeConsumer();
+
+    expect(() =>
+      checkCliFixtureUsage(consumer, "hookassert", {
+        bin: { hookassert: "./dist/cli.js" },
+      }),
+    ).toThrow(/ERR_SMOKE_CLI_EXPLAIN_FAILED/);
+    expect(runNodeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("throws ERR_SMOKE_CLI_EXPLAIN_FAILED when explain exits 0 but the fixture hook is not firing", () => {
+    runNodeMock.mockReturnValue({
+      status: 0,
+      stdout: JSON.stringify({
+        firing: [],
+        rejected: [
+          { hook: { command: "echo hookassert-smoke-ok" }, reason: "did not match" },
+        ],
+      }),
+      stderr: "",
+    });
+    const consumer = makeConsumer();
+
+    expect(() =>
+      checkCliFixtureUsage(consumer, "hookassert", {
+        bin: { hookassert: "./dist/cli.js" },
+      }),
+    ).toThrow(/ERR_SMOKE_CLI_EXPLAIN_FAILED/);
+    expect(runNodeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("throws ERR_SMOKE_CLI_LINT_FAILED when lint fails against the clean fixture", () => {
+    runNodeMock.mockImplementation((_script, args) =>
+      args[0] === "lint"
+        ? { status: 1, stdout: "", stderr: "boom" }
+        : { status: 0, stdout: explainJsonWithFiring, stderr: "" },
+    );
+    const consumer = makeConsumer();
+
+    expect(() =>
+      checkCliFixtureUsage(consumer, "hookassert", {
+        bin: { hookassert: "./dist/cli.js" },
+      }),
+    ).toThrow(/ERR_SMOKE_CLI_LINT_FAILED/);
+    expect(runNodeMock).toHaveBeenCalledTimes(2);
   });
 });
 
