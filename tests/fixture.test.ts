@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 
 import {
+  FixtureFiresFalseConflictError,
   FixtureNotFoundError,
   FixtureSchemaError,
   FixtureUnblockableDecisionError,
@@ -255,6 +256,78 @@ describe("loadFixtureFile: ERR_FIXTURE_UNBLOCKABLE_DECISION (exit 5)", () => {
       ).not.toThrow();
     },
   );
+});
+
+describe("loadFixtureFile: ERR_FIXTURE_FIRES_FALSE_CONFLICT (exit 5)", () => {
+  it("throws ERR_FIXTURE_FIRES_FALSE_CONFLICT (exit 5) when fires: false is paired with another expect field", () => {
+    const error = caught(() =>
+      loadFixture(
+        {
+          cases: [
+            {
+              event: "PreToolUse",
+              expect: { fires: false, decision: "deny" },
+            },
+          ],
+        },
+        fixturePath("synthetic.yaml"),
+        spec,
+      ),
+    );
+
+    expect(error).toBeInstanceOf(FixtureFiresFalseConflictError);
+    const conflictError = error as FixtureFiresFalseConflictError;
+    expect(conflictError.code).toBe("ERR_FIXTURE_FIRES_FALSE_CONFLICT");
+    expect(conflictError.exitCode).toBe(5);
+    expect(conflictError.fields).toEqual(["decision"]);
+    expect(conflictError.message).toContain("fires: false");
+  });
+
+  it("names every other declared expect field, not only the first", () => {
+    const error = caught(() =>
+      loadFixture(
+        {
+          cases: [
+            {
+              event: "PreToolUse",
+              expect: {
+                fires: false,
+                exitCode: 0,
+                stdoutContains: "ok",
+                timedOut: false,
+              },
+            },
+          ],
+        },
+        fixturePath("synthetic.yaml"),
+        spec,
+      ),
+    ) as FixtureFiresFalseConflictError;
+
+    expect(error.fields).toEqual(["exitCode", "stdoutContains", "timedOut"]);
+  });
+
+  it("does not throw for fires: false declared alone", () => {
+    expect(() =>
+      loadFixture(
+        { cases: [{ event: "PreToolUse", expect: { fires: false } }] },
+        fixturePath("synthetic.yaml"),
+        spec,
+      ),
+    ).not.toThrow();
+  });
+
+  it("does not throw for fires: true paired with another expect field", () => {
+    expect(() =>
+      loadFixture(
+        {
+          cases: [{ event: "PreToolUse", expect: { fires: true, decision: "deny" } }],
+        },
+        fixturePath("synthetic.yaml"),
+        spec,
+      ),
+    ).not.toThrow();
+  });
 });
 
 describe("loadFixtureFile: filesystem edge cases", () => {
