@@ -82,6 +82,10 @@ export interface MatcherRule {
 
 /** The matcher notation Claude Code accepts, and since which version. */
 export interface MatcherSyntax {
+  /**
+   * Whether the exact-list and regex comparisons are case-sensitive. Does
+   * not affect `exactListPattern`.
+   */
   readonly caseSensitive: boolean;
   readonly exactListPattern: string;
   readonly narrowExactMatchEvents: readonly string[];

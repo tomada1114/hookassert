@@ -68,7 +68,10 @@
         "rules"
       ],
       "properties": {
-        "caseSensitive": { "type": "boolean" },
+        "caseSensitive": {
+          "type": "boolean",
+          "description": "Whether the exact-list and regex comparisons are case-sensitive. Does not affect exactListPattern."
+        },
         "exactListPattern": {
           "type": "string",
           "minLength": 1,

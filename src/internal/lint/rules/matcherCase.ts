@@ -3,10 +3,13 @@
  * tool's own case.
  *
  * @remarks
- * `spec.matcherSyntax.caseSensitive` is `true`, and `matcher/match.ts`
- * compares an exact-list item against `req.target` with plain `===` — so
- * `"bash"` when the tool is `"Bash"` is a real, silent non-match, not a
- * style nit: the hook this matcher is attached to will never fire.
+ * Conditional on `spec.matcherSyntax.caseSensitive`. When it is `true`,
+ * `matcher/match.ts` compares an exact-list item against `req.target` with
+ * plain `===` — so `"bash"` when the tool is `"Bash"` is a real, silent
+ * non-match, not a style nit: the hook this matcher is attached to will
+ * never fire. When it is `false`, `match.ts` lowercases both sides before
+ * comparing, so a wrong-case matcher matches anyway and this rule reports
+ * nothing.
  */
 
 import type { Finding, LintContext, LintRule } from "../types.js";
@@ -59,6 +62,9 @@ export const matcherCaseRule: LintRule = {
   id: "matcher-case",
 
   run(ctx: LintContext): readonly Finding[] {
+    if (!ctx.spec.matcherSyntax.caseSensitive) {
+      return [];
+    }
     const findings: Finding[] = [];
     for (const group of ctx.groups) {
       if (group.matcher.kind !== "string") {
