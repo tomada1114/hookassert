@@ -75,6 +75,7 @@ import {
   discoverSources,
   hooksForEvent,
   loadSettings,
+  type SettingsSource,
 } from "./internal/settings/index.js";
 import { loadSpecFile, parseClaudeVersion, type Spec } from "./internal/spec/index.js";
 import type { CaseResult, EventName, ExecOutcome, ResolvedHook } from "./types.js";
@@ -432,6 +433,38 @@ function parseArgsForExplain(args: readonly string[]) {
 }
 
 /**
+ * `explain`, `lint`, and `test`'s shared settings-discovery prologue: assert
+ * every caller-named `--settings <file>` exists, then discover the three
+ * well-known layers alongside it.
+ *
+ * @remarks
+ * A missing *discovered* layer (`user`/`project`/`local`) is not an error —
+ * most projects declare only one or two of the three, and `loadSourceHooks`
+ * treats a missing file as contributing zero hooks. A file the caller named
+ * explicitly is an assertion it exists: without this check, a typo would
+ * print "no hooks fire" at exit 0 from the command whose whole job is
+ * saying which hooks fire, instead of failing loudly.
+ *
+ * @throws {SettingsNotFoundError} a named `--settings` file does not exist.
+ */
+function resolveSettingsSources(
+  explicitSettings: readonly string[] | undefined,
+  deps: CliDeps,
+): readonly SettingsSource[] {
+  for (const file of explicitSettings ?? []) {
+    const resolved = path.resolve(deps.cwd, file);
+    if (!existsSync(resolved)) {
+      throw new SettingsNotFoundError(resolved);
+    }
+  }
+  return discoverSources({
+    cwd: deps.cwd,
+    home: deps.home,
+    ...(explicitSettings === undefined ? {} : { explicit: explicitSettings }),
+  });
+}
+
+/**
  * `parseArgs({ strict: true })` throws on an unknown option, a missing
  * required value, or a value of the wrong type. Translated here into a
  * `UsageError` rather than letting the raw exception escape `runCli`.
@@ -490,21 +523,7 @@ function runExplain(args: readonly string[], deps: CliDeps): CliResult {
   const spec = loadSpecFile(deps.specPath);
 
   const explicitSettings = parsed.values.settings;
-  // The loader maps a missing settings file to zero hooks, which is right for
-  // the three discovered layers and wrong for one the caller named: a typo
-  // would otherwise print "Firing hooks: none" at exit 0. This is the only
-  // layer that can tell the two apart.
-  for (const file of explicitSettings ?? []) {
-    const resolved = path.resolve(deps.cwd, file);
-    if (!existsSync(resolved)) {
-      throw new SettingsNotFoundError(resolved);
-    }
-  }
-  const sources = discoverSources({
-    cwd: deps.cwd,
-    home: deps.home,
-    ...(explicitSettings === undefined ? {} : { explicit: explicitSettings }),
-  });
+  const sources = resolveSettingsSources(explicitSettings, deps);
   const settings = loadSettings(sources);
   const hooks = hooksForEvent(settings, event);
   const match = matchHooks(spec, versionContext, { event, hooks, target: tool });
@@ -597,19 +616,7 @@ function runLint(args: readonly string[], deps: CliDeps): CliResult {
   const spec = loadSpecFile(deps.specPath);
 
   const explicitSettings = parsed.values.settings;
-  // Same rationale as runExplain: a settings file the caller named
-  // explicitly is an assertion it exists, unlike a discovered layer.
-  for (const file of explicitSettings ?? []) {
-    const resolved = path.resolve(deps.cwd, file);
-    if (!existsSync(resolved)) {
-      throw new SettingsNotFoundError(resolved);
-    }
-  }
-  const sources = discoverSources({
-    cwd: deps.cwd,
-    home: deps.home,
-    ...(explicitSettings === undefined ? {} : { explicit: explicitSettings }),
-  });
+  const sources = resolveSettingsSources(explicitSettings, deps);
 
   const ctx = buildLintContext(sources, spec, versionContext, deps.cwd, deps.env);
   const findings = LINT_RULES.flatMap((rule) => rule.run(ctx));
@@ -1154,12 +1161,7 @@ async function runTest(args: readonly string[], deps: CliDeps): Promise<CliResul
   const timeoutOverrideMs = parseTimeoutOption(parsed.values.timeout);
 
   const explicitSettings = parsed.values.settings;
-  for (const file of explicitSettings ?? []) {
-    const resolved = path.resolve(deps.cwd, file);
-    if (!existsSync(resolved)) {
-      throw new SettingsNotFoundError(resolved);
-    }
-  }
+  const sources = resolveSettingsSources(explicitSettings, deps);
 
   const dryRunFlag = parsed.values["dry-run"] === true;
 
@@ -1190,12 +1192,7 @@ async function runTest(args: readonly string[], deps: CliDeps): Promise<CliResul
     probe,
   );
 
-  const discoveredSources = discoverSources({
-    cwd: deps.cwd,
-    home: deps.home,
-    ...(explicitSettings === undefined ? {} : { explicit: explicitSettings }),
-  });
-  const discoveredSettings = loadSettings(discoveredSources);
+  const discoveredSettings = loadSettings(sources);
   const cliEnvNames = parsed.values.env ?? [];
 
   const prepared: PreparedCase[] = [];

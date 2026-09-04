@@ -26,7 +26,6 @@ import {
   findNodeAtLocation,
   modify,
   parseTree,
-  printParseErrorCode,
   type ModificationOptions,
   type Node,
   type ParseError,
@@ -34,6 +33,7 @@ import {
 
 import { SettingsParseError } from "../errors.js";
 import type { EventName } from "../../types.js";
+import { describeParseErrors } from "./jsonc.js";
 
 /** One event `record` inserts a capture-hook matcher group for. */
 export interface CaptureHookEntry {
@@ -146,15 +146,6 @@ function groupValue(command: string, matcher: string | undefined): unknown {
   return matcher === undefined
     ? { hooks: [{ command: quotedCommand }] }
     : { matcher, hooks: [{ command: quotedCommand }] };
-}
-
-function describeParseErrors(errors: readonly ParseError[]): string {
-  return errors
-    .map(
-      (error) =>
-        `${printParseErrorCode(error.error)} at offset ${String(error.offset)}`,
-    )
-    .join(", ");
 }
 
 /**

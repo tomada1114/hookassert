@@ -21,6 +21,17 @@ export type {
   CaptureHookEntry,
   CapturePlan,
 } from "./edit.js";
+export {
+  fail,
+  getProperty,
+  isEventName,
+  positionAt,
+  readCommandEntry,
+  readSettingsTree,
+  requireArray,
+  requireObject,
+  requireString,
+} from "./jsonc.js";
 export { loadSourceHooks } from "./load.js";
 export { hooksForEvent, mergeSources } from "./merge.js";
 export type {
