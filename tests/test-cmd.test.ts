@@ -727,6 +727,48 @@ describe("the consent gate", () => {
     expect(spawner.calls).toHaveLength(1);
     expect(promptSeen).toContain(process.execPath);
   });
+
+  it("names the default cap in the prompt (up to 8 at a time)", async () => {
+    const spawner = new FakeSpawner();
+    const fixturePath = singlePassingCaseFixture();
+    let promptSeen = "";
+
+    await runCli(
+      ["test", fixturePath, "--claude-version", "2.1.300"],
+      "hookassert",
+      testDeps({
+        spawner,
+        isTTY: true,
+        confirm: (prompt) => {
+          promptSeen = prompt;
+          return Promise.resolve(true);
+        },
+      }),
+    );
+
+    expect(promptSeen).toContain("About to run 1 command(s), up to 8 at a time:");
+  });
+
+  it("names a --concurrency 1 cap in the prompt as one at a time", async () => {
+    const spawner = new FakeSpawner();
+    const fixturePath = singlePassingCaseFixture();
+    let promptSeen = "";
+
+    await runCli(
+      ["test", fixturePath, "--claude-version", "2.1.300", "--concurrency", "1"],
+      "hookassert",
+      testDeps({
+        spawner,
+        isTTY: true,
+        confirm: (prompt) => {
+          promptSeen = prompt;
+          return Promise.resolve(true);
+        },
+      }),
+    );
+
+    expect(promptSeen).toContain("About to run 1 command(s), one at a time:");
+  });
 });
 
 describe("--dry-run and stub-only exclusion from the spawn plan", () => {
@@ -869,6 +911,113 @@ describe("--timeout", () => {
     expect(result.exitCode).toBe(0);
     const hookCall = spawner.calls.find((call) => call.command !== "claude");
     expect(hookCall?.timeoutMs).toBe(900_000);
+  });
+});
+
+describe("--concurrency", () => {
+  it.each(["0", "-1", "1.5", "abc", ""])(
+    "rejects --concurrency %j with ERR_USAGE and spawns nothing",
+    async (value) => {
+      const spawner = new FakeSpawner();
+      const fixturePath = writeFixture({
+        cases: [{ event: "PreToolUse", tool: "Bash", expect: { decision: "pass" } }],
+      });
+
+      const result = await runCli(
+        [
+          "test",
+          fixturePath,
+          "--claude-version",
+          "2.1.300",
+          "--yes",
+          "--concurrency",
+          value,
+        ],
+        "hookassert",
+        testDeps({ spawner }),
+      );
+
+      expect(result.exitCode).toBe(4);
+      expect(result.stderr).toContain("ERR_USAGE");
+      expect(spawner.calls).toHaveLength(0);
+    },
+  );
+
+  /**
+   * A `Spawner` whose calls stay pending until manually released one at a
+   * time, and which records the maximum number of calls in flight at once —
+   * the same shape as the `GatedSpawner` in the cross-file concurrency
+   * suite above, but releasing a single call rather than every pending one,
+   * so a test can prove a second call is never issued while the first is
+   * still outstanding.
+   */
+  class SingleReleaseGatedSpawner implements Spawner {
+    readonly calls: SpawnRequest[] = [];
+    readonly #pending: (() => void)[] = [];
+    #current = 0;
+    maxObserved = 0;
+
+    spawn(req: SpawnRequest): Promise<ExecOutcome> {
+      this.calls.push(req);
+      this.#current += 1;
+      this.maxObserved = Math.max(this.maxObserved, this.#current);
+      return new Promise((resolve) => {
+        this.#pending.push(() => {
+          this.#current -= 1;
+          resolve({
+            exitCode: 0,
+            stdout: "",
+            stderr: "",
+            timedOut: false,
+            launchError: undefined,
+          });
+        });
+      });
+    }
+
+    /** Resolves the single oldest pending call, letting its worker move on. */
+    releaseOne(): void {
+      const next = this.#pending.shift();
+      next?.();
+    }
+  }
+
+  it("--concurrency 1 runs firing hooks one at a time", async () => {
+    const spawner = new SingleReleaseGatedSpawner();
+    const fixturePath = writeFixture({
+      cases: [
+        { event: "PreToolUse", tool: "Bash", expect: {} },
+        { event: "PreToolUse", tool: "Write", expect: {} },
+        { event: "PreToolUse", tool: "Edit", expect: {} },
+      ],
+    });
+
+    const resultPromise = runCli(
+      [
+        "test",
+        fixturePath,
+        "--claude-version",
+        "2.1.300",
+        "--yes",
+        "--concurrency",
+        "1",
+      ],
+      "hookassert",
+      testDeps({ spawner }),
+    );
+
+    for (let released = 0; released < 3; released += 1) {
+      await vi.waitFor(() => {
+        expect(spawner.calls.length).toBeGreaterThan(released);
+      });
+      spawner.releaseOne();
+    }
+
+    const result = await resultPromise;
+
+    expect(result.exitCode).toBe(0);
+    expect(spawner.calls).toHaveLength(3);
+    expect(spawner.maxObserved).toBe(1);
   });
 });
 

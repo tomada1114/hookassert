@@ -120,6 +120,13 @@ describe("runCli help", () => {
     expect(result.stderr).toBe("");
   });
 
+  it("--help for test mentions --concurrency", async () => {
+    const result = await runCli(["test", "--help"]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("--concurrency");
+  });
+
   it("exits 0 with the usage text when given no arguments", async () => {
     // Deliberate: a bare invocation stays exit 0, as it was before subcommand
     // dispatch existed. Only the empty stdout changes — printing the commands

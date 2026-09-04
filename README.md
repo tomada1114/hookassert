@@ -130,24 +130,26 @@ hookassert --help
   confirmation; `--yes` and `--ci` both skip the prompt, and a non-interactive run given
   neither exits `6` with `ERR_CONSENT_REQUIRED` instead of running anything. `--dry-run`
   excludes every case from the spawn plan; `--claude-version`, `--settings` and
-  `--format` (`pretty`/`json`/`github`) mean exactly what they do for `explain`, and two
-  options are `test`'s own: `--timeout <ms>` sets the default hook timeout in
+  `--format` (`pretty`/`json`/`github`) mean exactly what they do for `explain`, and
+  three options are `test`'s own: `--timeout <ms>` sets the default hook timeout in
   milliseconds for hooks that declare none (a fixture file's own `defaults.timeoutMs`
-  still wins over it), and a repeatable `--env <NAME>` opts one ambient environment
-  variable into every spawned hook's environment by name — a value is never accepted
-  here, only a name. When several hooks fire for one case, any deny wins; the report
-  names the hook that decided. A hook whose process never starts at all — an exec-form
-  hook (one declaring `args`) naming a command that does not exist, a missing
-  interpreter — resolves to `decision: error` (`cause: launch-failed`) rather than being
-  mistaken for a hook that ran and exited non-zero. A failing case's `pretty` and
-  `github` output then shows the OS-reported reason (`spawn python33 ENOENT`, say)
-  alongside the hook's own declaration, and the JSON report carries it as
-  `decidedBy.launchError`. A shell-form hook (no `args`, the shape Claude Code's own
-  docs show) always launches `/bin/sh` successfully, so a typo'd `command` there is
-  reported by the shell itself — usually exit `127` — not as `launch-failed`. Exits `0`
-  when every case passes (and, with `--ci`, none is `unknown` either), `1` when at least
-  one fails, and `3` when there are no failures but `--ci` was given and at least one
-  case is `unknown`.
+  still wins over it), a repeatable `--env <NAME>` opts one ambient environment variable
+  into every spawned hook's environment by name — a value is never accepted here, only a
+  name — and `--concurrency <n>` runs at most n hooks at once (default 8; use 1 for
+  hooks that must not overlap). The interactive consent prompt names the cap it will run
+  under (`up to 8 at a time`, or `one at a time` under `--concurrency 1`). When several
+  hooks fire for one case, any deny wins; the report names the hook that decided. A hook
+  whose process never starts at all — an exec-form hook (one declaring `args`) naming a
+  command that does not exist, a missing interpreter — resolves to `decision: error`
+  (`cause: launch-failed`) rather than being mistaken for a hook that ran and exited
+  non-zero. A failing case's `pretty` and `github` output then shows the OS-reported
+  reason (`spawn python33 ENOENT`, say) alongside the hook's own declaration, and the
+  JSON report carries it as `decidedBy.launchError`. A shell-form hook (no `args`, the
+  shape Claude Code's own docs show) always launches `/bin/sh` successfully, so a typo'd
+  `command` there is reported by the shell itself — usually exit `127` — not as
+  `launch-failed`. Exits `0` when every case passes (and, with `--ci`, none is `unknown`
+  either), `1` when at least one fails, and `3` when there are no failures but `--ci`
+  was given and at least one case is `unknown`.
 
   ```console
   $ hookassert test fixtures/force-push.fixture.yaml --ci
