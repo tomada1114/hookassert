@@ -629,11 +629,17 @@ describe.each([
     expect(undeterminedFinding?.message).not.toBe(oldVersionFinding?.message);
   });
 
-  it("degrades to the same unknown-confidence finding — rather than silently passing — when the known version is outside spec.claudeCodeRange", () => {
+  it("degrades to an unknown-confidence finding — rather than silently passing — when the known version is outside spec.claudeCodeRange, with wording distinct from the undetermined case", () => {
     const [finding] = rule.run(contextFor(source, OUT_OF_RANGE_VERSION));
 
     expect(finding).toBeDefined();
-    expect(finding?.message).toContain("could not be determined");
+    expect(finding?.message).not.toContain("could not be determined");
+    expect(finding?.message).toContain("3.0.0");
+    expect(finding?.message).toContain("outside the range this spec describes");
+    expect(finding?.message).toContain(REAL_SPEC.claudeCodeRange);
+
+    const [undeterminedFinding] = rule.run(contextFor(source, UNDETERMINED));
+    expect(undeterminedFinding?.message).not.toBe(finding?.message);
   });
 });
 

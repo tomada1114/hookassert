@@ -489,7 +489,8 @@ export interface RejectedMatch {
 }
 
 /**
- * Why a fixture case's `expect.fires: true` was not met.
+ * Why no hook fired for a fixture case that declared an `expect` field
+ * other than `fires: false` — which requires a hook to have fired.
  *
  * @remarks
  * `"matcher-did-not-match"` — at least one candidate hook was declared under
@@ -589,9 +590,11 @@ export type CaseResult =
        */
       readonly diffs: readonly ExpectationDiff[];
       /**
-       * Set when the failure is that `expect.fires: true` was declared but
-       * no hook fired; `undefined` when the failure is instead a `diffs`
-       * mismatch (on this same result) on a hook that did fire.
+       * Set when the failure is that a declared `expect` field (anything
+       * other than `fires: false`, which passes on its own) could not be
+       * met because no hook fired at all; `undefined` when the failure is
+       * instead a `diffs` mismatch (on this same result) on a hook that did
+       * fire.
        */
       readonly nonFiring: NonFiringExplanation | undefined;
       /** The hook whose `Decision` this case's verdict came from; `undefined` when no hook fired at all. */

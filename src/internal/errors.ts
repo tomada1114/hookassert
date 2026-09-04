@@ -343,6 +343,54 @@ export class FixtureUnblockableDecisionError extends HookassertError {
 }
 
 /**
+ * Thrown when a fixture case pairs `expect.fires: false` with any other
+ * `expect` field.
+ *
+ * @remarks
+ * `expect.fires: false` already means "nothing fires, and that is the whole
+ * assertion" — `assertCase` (issue #68) treats that declaration as passing
+ * the moment no hook fires, before any other `expect` field is even
+ * consulted. Pairing it with `decision`, `exitCode`, `stdoutContains`,
+ * `stderrContains`, `context`, `updatedInput`, or `timedOut` is therefore
+ * unsatisfiable by construction: if nothing fires there is no decision, exit
+ * code, stream, context, or updated input to compare against those fields,
+ * and if something does fire, `fires: false` itself already fails the case.
+ * Rejecting the pair at load time — the same load-time-rejection shape
+ * {@link FixtureUnblockableDecisionError} uses — beats letting a fixture
+ * author discover the contradiction as a confusing runtime result.
+ */
+export class FixtureFiresFalseConflictError extends HookassertError {
+  /** Stable discriminator, unchanged across non-breaking releases. */
+  readonly code = "ERR_FIXTURE_FIRES_FALSE_CONFLICT" as const;
+
+  /** Fires-false-conflict failures always exit 5 (load error). */
+  readonly exitCode = 5;
+
+  /** Absolute path of the fixture file the offending case was declared in. */
+  readonly file: string;
+
+  /** Every other `expect` field the offending case declared alongside `fires: false`. */
+  readonly fields: readonly string[];
+
+  /**
+   * @param file - Absolute path of the fixture file the case was declared in.
+   * @param fields - Every other `expect` field declared alongside `fires: false`.
+   */
+  constructor(file: string, fields: readonly string[]) {
+    super(
+      `Fixture ${file} declares expect.fires: false together with ` +
+        `${fields.join(", ")}, but "fires: false" already means nothing fires ` +
+        `and the case passes on that alone — there is no decision, exit code, ` +
+        `stream, context, or updated input to compare the other field(s) ` +
+        `against. Drop "fires: false", or drop the other expect field(s).`,
+    );
+    this.name = "FixtureFiresFalseConflictError";
+    this.file = file;
+    this.fields = fields;
+  }
+}
+
+/**
  * Thrown when `record --stop` finds no active session to restore.
  *
  * @remarks

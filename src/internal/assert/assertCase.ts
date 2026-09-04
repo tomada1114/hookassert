@@ -96,8 +96,9 @@ export function isStubOnly(caseData: FixtureCase): boolean {
 }
 
 /**
- * Explain why `expect.fires: true` was not met, from what the matcher
- * engine already found for this case's event.
+ * Explain why no hook fired for a case that declared an expectation other
+ * than `fires: false`, from what the matcher engine already found for this
+ * case's event.
  *
  * @remarks
  * Checked in this order: a candidate hook the matcher rejected outranks a
@@ -257,9 +258,12 @@ function isNonEmptyFired(
  * Checked in this order:
  * 1. `caseData.dryRun: true` or a stub-only case with no declared
  *    expectation → `"skipped"`, nothing to compare.
- * 2. No hook fired at all: `expect.fires: true` → `"fail"` with
- *    {@link NonFiringExplanation}; otherwise → `"pass"`, since nothing else
- *    was declared to compare against a case that was not expected to fire.
+ * 2. No hook fired at all (issue #68): `expect.fires: false` → `"pass"`,
+ *    the explicit opt-out for "I expect nothing to fire". Any other
+ *    declared `expect` field (including `fires: true` on its own) →
+ *    `"fail"` with {@link NonFiringExplanation} — a declared expectation
+ *    that nothing fired could possibly satisfy. A wholly empty `expect` →
+ *    `"pass"`, since there was nothing declared to compare.
  * 3. One or more hooks fired: every firing hook's own `Decision` is folded
  *    into one combined verdict by `combineDecisions`
  *    (`deny` > `unknown` > `error` > `allow` > `pass` — any deny wins,
@@ -291,7 +295,20 @@ export function assertCase(
 
   const { fired } = observation;
   if (!isNonEmptyFired(fired)) {
-    if (caseData.expect.fires === true) {
+    // `fires: false` is the explicit opt-out — "I expect nothing to
+    // fire" — and passes on its own; `fixture/load.ts`'s
+    // FixtureFiresFalseConflictError already rejects pairing it with any
+    // other expect field at load time, so this branch never has to weigh
+    // the two against each other.
+    if (caseData.expect.fires === false) {
+      return { kind: "pass", origin, decidedBy: undefined };
+    }
+    // Any other declared expectation — decision, exitCode,
+    // stdoutContains, stderrContains, timedOut, context, updatedInput, or
+    // fires: true itself — cannot have been observed when nothing fired,
+    // so it fails rather than passing by default (issue #68). Only a
+    // wholly empty expectation still passes: there was nothing to compare.
+    if (!isEmptyExpectation(caseData.expect)) {
       return {
         kind: "fail",
         origin,

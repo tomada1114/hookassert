@@ -9,14 +9,16 @@
  * it, but never spawns a process and never writes anything back, the same
  * convention `settings/load.ts` and `spec/load.ts` follow.
  *
- * The load-time rejection this issue exists for lives in
- * {@link toFixtureCase}: a case whose `expect.decision` is `"deny"` against
- * an event the spec documents no deny channel for — `decision/`'s
- * `canProduceDeny`, which reads both the exit-code and the JSON channel
- * rather than `blockable` alone — throws
- * {@link FixtureUnblockableDecisionError} while turning the raw case into a
- * typed `FixtureCase` — before `loadFixture` returns, so before any later
- * pipeline stage could spawn a process for it.
+ * Two load-time rejections live in {@link toFixtureCase}, both before
+ * `loadFixture` returns so before any later pipeline stage could spawn a
+ * process for the offending case: a case whose `expect.decision` is `"deny"`
+ * against an event the spec documents no deny channel for —
+ * `decision/`'s `canProduceDeny`, which reads both the exit-code and the
+ * JSON channel rather than `blockable` alone — throws
+ * {@link FixtureUnblockableDecisionError}; a case that pairs `expect.fires:
+ * false` with any other declared `expect` field — unsatisfiable by
+ * construction, since `assertCase` (issue #68) treats `fires: false` alone
+ * as the whole assertion — throws {@link FixtureFiresFalseConflictError}.
  */
 
 import { readFileSync } from "node:fs";
@@ -27,6 +29,7 @@ import { parse as parseYaml } from "yaml";
 import type { EventName, PayloadOrigin } from "../../types.js";
 import { canProduceDeny } from "../decision/index.js";
 import {
+  FixtureFiresFalseConflictError,
   FixtureNotFoundError,
   FixtureSchemaError,
   FixtureUnblockableDecisionError,
@@ -38,6 +41,7 @@ import type {
   FixtureFile,
   FixtureSet,
   RawFixtureCase,
+  RawFixtureExpectation,
   RawFixtureOrigin,
 } from "./types.js";
 
@@ -198,12 +202,51 @@ function resolveOrigin(
 }
 
 /**
+ * Every `RawFixtureExpectation` field other than `fires`, in the order a
+ * {@link FixtureFiresFalseConflictError} lists them.
+ */
+const OTHER_EXPECTATION_FIELDS = [
+  "decision",
+  "exitCode",
+  "stdoutContains",
+  "stderrContains",
+  "context",
+  "updatedInput",
+  "timedOut",
+] as const satisfies readonly (keyof Omit<RawFixtureExpectation, "fires">)[];
+
+/**
+ * Reject `expect.fires: false` paired with any other declared `expect`
+ * field, per {@link FixtureFiresFalseConflictError}'s rationale: that pair is
+ * unsatisfiable by construction.
+ *
+ * @throws {FixtureFiresFalseConflictError} `expect.fires === false` and at
+ * least one other `expect` field is also declared.
+ */
+function checkFiresFalseConflict(
+  expect: RawFixtureExpectation,
+  fixturePath: string,
+): void {
+  if (expect.fires !== false) {
+    return;
+  }
+  const declaredFields = OTHER_EXPECTATION_FIELDS.filter(
+    (field) => expect[field] !== undefined,
+  );
+  if (declaredFields.length > 0) {
+    throw new FixtureFiresFalseConflictError(fixturePath, declaredFields);
+  }
+}
+
+/**
  * Turn one already schema-valid raw case into a typed {@link FixtureCase}.
  *
  * @throws {FixtureSchemaError} `rawCase.event` is not a recognized event, or
  * its `origin.recorded` envelope cannot be resolved.
  * @throws {FixtureUnblockableDecisionError} `rawCase.expect.decision` is
  * `"deny"` against an event the loaded spec documents no deny channel for.
+ * @throws {FixtureFiresFalseConflictError} `rawCase.expect.fires` is `false`
+ * and at least one other `expect` field is also declared.
  */
 function toFixtureCase(
   rawCase: RawFixtureCase,
@@ -212,6 +255,7 @@ function toFixtureCase(
   spec: Spec,
 ): FixtureCase {
   const event = requireEventName(rawCase.event, index, fixturePath);
+  checkFiresFalseConflict(rawCase.expect, fixturePath);
 
   const decision = rawCase.expect.decision;
   const eventSpec = spec.events[event];
@@ -259,6 +303,8 @@ function toFixtureCase(
  * `origin.recorded` at an envelope file that cannot be resolved.
  * @throws {FixtureUnblockableDecisionError} a case expects `decision:
  * "deny"` from an event `spec` documents no deny channel for.
+ * @throws {FixtureFiresFalseConflictError} a case declares `expect.fires:
+ * false` alongside another `expect` field.
  */
 export function loadFixture(raw: unknown, filePath: string, spec: Spec): FixtureFile {
   if (!isValidRawFixtureFile(raw)) {
@@ -284,6 +330,8 @@ export function loadFixture(raw: unknown, filePath: string, spec: Spec): Fixture
  * does not satisfy `schema/fixture.schema.json` once parsed.
  * @throws {FixtureUnblockableDecisionError} a case expects `decision:
  * "deny"` from an event `spec` documents no deny channel for.
+ * @throws {FixtureFiresFalseConflictError} a case declares `expect.fires:
+ * false` alongside another `expect` field.
  */
 export function loadFixtureFile(filePath: string, spec: Spec): FixtureFile {
   let text: string;
@@ -315,6 +363,8 @@ export function loadFixtureFile(filePath: string, spec: Spec): FixtureFile {
  * YAML, or does not satisfy `schema/fixture.schema.json` once parsed.
  * @throws {FixtureUnblockableDecisionError} a case in one of `filePaths`
  * expects `decision: "deny"` from an event `spec` documents no deny channel for.
+ * @throws {FixtureFiresFalseConflictError} a case in one of `filePaths`
+ * declares `expect.fires: false` alongside another `expect` field.
  */
 export function loadFixtures(filePaths: readonly string[], spec: Spec): FixtureSet {
   return {
