@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -8,6 +8,7 @@ import { SettingsParseError } from "../src/internal/errors.js";
 import {
   buildLintContext,
   LINT_RULES,
+  readHookCommands,
   readMatcherGroups,
 } from "../src/internal/lint/index.js";
 import type {
@@ -23,6 +24,7 @@ import {
   toJsonLintReport,
   type LintReport,
 } from "../src/internal/report/index.js";
+import { loadSourceHooks } from "../src/internal/settings/index.js";
 import type { SettingsSource } from "../src/internal/settings/index.js";
 import {
   loadSpec,
@@ -921,6 +923,60 @@ describe("readMatcherGroups: the tolerant reader's own structural strictness", (
       layer: "project",
     };
     expect(readMatcherGroups(source)).toEqual([]);
+  });
+});
+
+describe("readHookCommands: agreement with the strict loader", () => {
+  it("yields the same (event, command, args, line) tuples as loadSourceHooks, for every settings fixture the strict loader accepts", () => {
+    // Both readers walk the same shared parse (`settings/jsonc.ts`) and are
+    // meant to read every command entry identically — the only place they
+    // may differ is how a `matcher` itself is read, which this comparison
+    // never looks at. A fixture the strict loader rejects (malformed JSONC,
+    // an array-valued matcher, any other structural error) is skipped here:
+    // it is exactly the case the two readers are allowed to disagree about,
+    // and `tests/settings.test.ts` and the "structural strictness" describe
+    // block above already cover it.
+    const fixtureFiles = readdirSync(SETTINGS_FIXTURES_DIR, {
+      recursive: true,
+      encoding: "utf8",
+    })
+      .filter((entry) => entry.endsWith(".json"))
+      .map((relative) => path.join(SETTINGS_FIXTURES_DIR, relative));
+
+    expect(fixtureFiles.length).toBeGreaterThan(0);
+
+    let comparedAtLeastOne = false;
+    for (const file of fixtureFiles) {
+      const source: SettingsSource = { path: file, layer: "project" };
+
+      let strictHooks: ReturnType<typeof loadSourceHooks>;
+      try {
+        strictHooks = loadSourceHooks(source);
+      } catch (error) {
+        expect(error).toBeInstanceOf(SettingsParseError);
+        continue;
+      }
+
+      comparedAtLeastOne = true;
+      const tolerantCommands = readHookCommands(source);
+      expect(
+        tolerantCommands.map((command) => [
+          command.event,
+          command.command,
+          command.args,
+          command.line,
+        ]),
+      ).toEqual(
+        strictHooks.map((hook) => [
+          hook.event,
+          hook.command,
+          hook.args,
+          hook.provenance.line,
+        ]),
+      );
+    }
+
+    expect(comparedAtLeastOne).toBe(true);
   });
 });
 
