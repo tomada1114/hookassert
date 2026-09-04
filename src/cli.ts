@@ -817,10 +817,19 @@ const TEST_OPTIONS = {
  * `--claude-version` and {@link CLAUDE_VERSION_ENV_VAR} are resolved exactly
  * as {@link resolveVersionContext} already does for `explain`/`lint`
  * (including its `UsageError` on an invalid value); `probe.detect()` is
- * tried only when both of those came back empty, and "last recorded
- * session's version" — the step between the probe and `"undetermined"` — is
- * a documented no-op until `record`'s own session bookkeeping (`#15`) ships:
- * there is nothing to read yet, so this always falls through past it.
+ * tried only when both of those came back empty *and* `skipProbe` is
+ * `false`, and "last recorded session's version" — the step between the
+ * probe and `"undetermined"` — is a documented no-op until `record`'s own
+ * session bookkeeping (`#15`) ships: there is nothing to read yet, so this
+ * always falls through past it.
+ *
+ * `skipProbe` is `test`'s own `--dry-run`: a dry run launches no hook at
+ * all, and spawning `claude --version` anyway would make "dry run" a lie.
+ * Skipping the step this way — rather than reordering the steps around it —
+ * keeps the fixed four-step order intact for every other case; a dry run
+ * with `--claude-version` or {@link CLAUDE_VERSION_ENV_VAR} set still resolves
+ * to that value, since `skipProbe` is only consulted once the first two
+ * steps have already come back empty.
  *
  * @throws {UsageError} `claudeVersionFlag` (or the environment variable, when
  * the flag is absent) is not a `major.minor.patch` string.
@@ -829,14 +838,17 @@ async function resolveVersionContextForTest(
   claudeVersionFlag: string | undefined,
   env: Readonly<Record<string, string | undefined>>,
   probe: VersionProbe,
+  skipProbe: boolean,
 ): Promise<VersionContext> {
   const direct = resolveVersionContext(claudeVersionFlag, env);
   if (direct.kind === "known") {
     return direct;
   }
-  const probed = await probe.detect();
-  if (probed !== undefined) {
-    return { kind: "known", version: probed };
+  if (!skipProbe) {
+    const probed = await probe.detect();
+    if (probed !== undefined) {
+      return { kind: "known", version: probed };
+    }
   }
   return { kind: "undetermined" };
 }
@@ -982,12 +994,15 @@ function resolveStepCwd(
  * explicit default is more specific than a run-wide override — which in turn
  * takes precedence over `HOOKASSERT_DEFAULT_TIMEOUT_MS`.
  *
- * `explicitDefaultTimeoutMs` is set from `cliTimeoutOverrideMs` only when no
- * `file.defaults.timeoutMs` applies: `--timeout` is what the design calls "an
- * override for the whole run", so it must actually win over
- * `resolveDefaultTimeoutMs`'s ceiling rather than being silently clamped by
- * it — see `executor.ts`'s own remark on `ExecDeps.explicitDefaultTimeoutMs`.
- * A file's own declared default stays subject to that ceiling, unchanged.
+ * `explicitDefaultTimeoutMs` is set from whichever of `file.defaults.timeoutMs`
+ * and `cliTimeoutOverrideMs` applies (the former winning when both do, per the
+ * precedence above): both are an explicit instruction — a value someone
+ * actually wrote down, in a fixture file or on the command line — rather than
+ * a computed fallback, so both bypass `resolveDefaultTimeoutMs`'s ceiling
+ * rather than being silently clamped by it — see `executor.ts`'s own remark on
+ * `ExecDeps.explicitDefaultTimeoutMs`. Only the case where neither is declared
+ * — hookassert's own computed default against the spec's ceiling — stays
+ * subject to that ceiling, unchanged.
  *
  * `cliConcurrencyOverride`, when given, is passed straight through as
  * `ExecDeps.concurrency` — there is no fixture-level `defaults.concurrency`
@@ -1007,6 +1022,7 @@ function buildExecDepsForFile(
 ): ExecDeps {
   const fileEnv = file.defaults?.env ?? {};
   const fileTimeoutMs = file.defaults?.timeoutMs;
+  const explicitDefaultTimeoutMs = fileTimeoutMs ?? cliTimeoutOverrideMs;
   return {
     spawner: deps.spawner,
     projectRoot: deps.cwd,
@@ -1014,11 +1030,9 @@ function buildExecDepsForFile(
     providedEnvKeys: spec.hookEnv.provided,
     allowedEnvKeys: [...cliEnvNames, ...Object.keys(fileEnv)],
     hookassertDefaultTimeoutMs:
-      fileTimeoutMs ?? cliTimeoutOverrideMs ?? HOOKASSERT_DEFAULT_TIMEOUT_MS,
+      explicitDefaultTimeoutMs ?? HOOKASSERT_DEFAULT_TIMEOUT_MS,
     specDefaultTimeoutMs: spec.defaults.hookTimeoutMs,
-    ...(fileTimeoutMs === undefined && cliTimeoutOverrideMs !== undefined
-      ? { explicitDefaultTimeoutMs: cliTimeoutOverrideMs }
-      : {}),
+    ...(explicitDefaultTimeoutMs === undefined ? {} : { explicitDefaultTimeoutMs }),
     ...(cliConcurrencyOverride === undefined
       ? {}
       : { concurrency: cliConcurrencyOverride }),
@@ -1245,6 +1259,7 @@ async function runTest(args: readonly string[], deps: CliDeps): Promise<CliResul
     parsed.values["claude-version"],
     deps.env,
     probe,
+    dryRunFlag,
   );
 
   const discoveredSettings = loadSettings(sources);

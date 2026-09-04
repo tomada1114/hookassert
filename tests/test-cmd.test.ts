@@ -1332,6 +1332,52 @@ describe("ClaudeVersion resolution order", () => {
     const probeCall = spawner.calls.find((call) => call.command === "claude");
     expect(probeCall?.args).toEqual(["--version"]);
   });
+
+  it("--dry-run skips the version probe and reports the version as undetermined (#44)", async () => {
+    const spawner = new FakeSpawner();
+    const fixturePath = writeFixture({
+      cases: [{ event: "PreToolUse", tool: "Bash", expect: { decision: "pass" } }],
+    });
+
+    const result = await runCli(
+      ["test", fixturePath, "--dry-run", "--format", "json"],
+      "hookassert",
+      testDeps({ spawner, env: {} }),
+    );
+
+    expect(result.exitCode).toBe(0);
+    // Nothing spawns at all under --dry-run: not the hook (already covered
+    // elsewhere), and — the point of this test — not the version probe either.
+    expect(spawner.calls).toHaveLength(0);
+    const report = parseJsonReport(result.stdout);
+    expect(report.header.claudeVersion).toBe("undetermined");
+  });
+
+  it("--dry-run still resolves the version from --claude-version, without probing", async () => {
+    const spawner = new FakeSpawner();
+    const fixturePath = writeFixture({
+      cases: [{ event: "PreToolUse", tool: "Bash", expect: { decision: "pass" } }],
+    });
+
+    const result = await runCli(
+      [
+        "test",
+        fixturePath,
+        "--dry-run",
+        "--claude-version",
+        "2.1.300",
+        "--format",
+        "json",
+      ],
+      "hookassert",
+      testDeps({ spawner, env: {} }),
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(spawner.calls).toHaveLength(0);
+    const report = parseJsonReport(result.stdout);
+    expect(report.header.claudeVersion).toBe("2.1.300");
+  });
 });
 
 describe("--timeout", () => {
@@ -1353,6 +1399,55 @@ describe("--timeout", () => {
         "--yes",
         "--timeout",
         "900000",
+      ],
+      "hookassert",
+      testDeps({ spawner }),
+    );
+
+    expect(result.exitCode).toBe(0);
+    const hookCall = spawner.calls.find((call) => call.command !== "claude");
+    expect(hookCall?.timeoutMs).toBe(900_000);
+  });
+});
+
+describe("a fixture file's own defaults.timeoutMs", () => {
+  it("above the spec's own ceiling is honored, not clamped", async () => {
+    const spawner = new FakeSpawner();
+    // Mirrors the --timeout test above: a fixture's own explicit default is
+    // exempt from resolveDefaultTimeoutMs's ceiling for the same reason
+    // --timeout and a hook's own declared timeoutMs already are (#44).
+    const fixturePath = writeFixture({
+      defaults: { timeoutMs: 900_000, env: {}, cwd: "." },
+      cases: [{ event: "PreToolUse", tool: "Bash", expect: { decision: "pass" } }],
+    });
+
+    const result = await runCli(
+      ["test", fixturePath, "--claude-version", "2.1.300", "--yes"],
+      "hookassert",
+      testDeps({ spawner }),
+    );
+
+    expect(result.exitCode).toBe(0);
+    const hookCall = spawner.calls.find((call) => call.command !== "claude");
+    expect(hookCall?.timeoutMs).toBe(900_000);
+  });
+
+  it("wins over --timeout when both are declared, per the documented precedence", async () => {
+    const spawner = new FakeSpawner();
+    const fixturePath = writeFixture({
+      defaults: { timeoutMs: 900_000, env: {}, cwd: "." },
+      cases: [{ event: "PreToolUse", tool: "Bash", expect: { decision: "pass" } }],
+    });
+
+    const result = await runCli(
+      [
+        "test",
+        fixturePath,
+        "--claude-version",
+        "2.1.300",
+        "--yes",
+        "--timeout",
+        "5000",
       ],
       "hookassert",
       testDeps({ spawner }),
