@@ -24,6 +24,7 @@ import {
 } from "./internal/errors.js";
 import {
   executeHooks,
+  HOOKASSERT_DEFAULT_CONCURRENCY,
   HOOKASSERT_DEFAULT_TIMEOUT_MS,
   NodeVersionProbe,
   type ExecDeps,
@@ -120,7 +121,7 @@ const COMMANDS = [
   ["explain", "Show which hooks a tool event fires, and why."],
   ["lint", "Check hook declarations for matcher and command mistakes."],
   ["record", "Capture real hook payloads from a Claude Code session."],
-  ["test", "Replay recorded events and assert on what the hooks did."],
+  ["test", "Replay recorded events and assert on hook behavior [--concurrency <n>]."],
 ] as const;
 
 type Subcommand = (typeof COMMANDS)[number][0];
@@ -803,6 +804,7 @@ const TEST_OPTIONS = {
   ci: { type: "boolean" },
   "dry-run": { type: "boolean" },
   timeout: { type: "string" },
+  concurrency: { type: "string" },
   env: { type: "string", multiple: true },
   help: { type: "boolean", short: "h" },
 } as const;
@@ -864,6 +866,29 @@ function parseTimeoutOption(value: string | undefined): number | undefined {
   if (!Number.isFinite(parsed) || parsed <= 0) {
     throw new UsageError(
       `--timeout must be a positive number of milliseconds, got ${JSON.stringify(value)}.`,
+    );
+  }
+  return parsed;
+}
+
+/**
+ * Parse `--concurrency`'s value into a positive integer worker-pool cap.
+ *
+ * @remarks
+ * Mirrors {@link parseTimeoutOption}'s shape: validated before any I/O, so an
+ * invalid value fails as a `UsageError` rather than reaching
+ * `executeHooks`'s own `RangeError`, which stays unreachable from the CLI.
+ *
+ * @throws {UsageError} `value` is defined but not an integer `>= 1`.
+ */
+function parseConcurrencyOption(value: string | undefined): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new UsageError(
+      `--concurrency must be a positive integer, got ${JSON.stringify(value)}.`,
     );
   }
   return parsed;
@@ -978,6 +1003,14 @@ function resolveStepCwd(
  * `ExecDeps.explicitDefaultTimeoutMs`. Only the case where neither is declared
  * — hookassert's own computed default against the spec's ceiling — stays
  * subject to that ceiling, unchanged.
+ *
+ * `cliConcurrencyOverride`, when given, is passed straight through as
+ * `ExecDeps.concurrency` — there is no fixture-level `defaults.concurrency`
+ * to take precedence over it, unlike the timeout fields above, and no
+ * `HOOKASSERT_*` environment variable either (see this issue's design: a
+ * second env var to document for a knob most users never touch was judged
+ * not worth it). Omitted entirely when absent, so `executeHooks` falls back
+ * to {@link HOOKASSERT_DEFAULT_CONCURRENCY} itself.
  */
 function buildExecDepsForFile(
   deps: CliDeps,
@@ -985,6 +1018,7 @@ function buildExecDepsForFile(
   spec: Spec,
   cliTimeoutOverrideMs: number | undefined,
   cliEnvNames: readonly string[],
+  cliConcurrencyOverride: number | undefined,
 ): ExecDeps {
   const fileEnv = file.defaults?.env ?? {};
   const fileTimeoutMs = file.defaults?.timeoutMs;
@@ -999,6 +1033,9 @@ function buildExecDepsForFile(
       explicitDefaultTimeoutMs ?? HOOKASSERT_DEFAULT_TIMEOUT_MS,
     specDefaultTimeoutMs: spec.defaults.hookTimeoutMs,
     ...(explicitDefaultTimeoutMs === undefined ? {} : { explicitDefaultTimeoutMs }),
+    ...(cliConcurrencyOverride === undefined
+      ? {}
+      : { concurrency: cliConcurrencyOverride }),
   };
 }
 
@@ -1070,6 +1107,14 @@ function assertConsentReachable(isTTY: boolean, yes: boolean, ci: boolean): void
  * non-interactive invocation that lacked `--yes`/`--ci`, so a non-empty
  * `spawnWorthy` reaching here is always on a TTY.
  *
+ * `concurrency` is the configured cap — `--concurrency`'s value when given,
+ * else {@link HOOKASSERT_DEFAULT_CONCURRENCY} — but the prompt reports
+ * `Math.min(concurrency, spawnWorthy.length)`: the cap can never be reached
+ * by fewer commands than the cap allows, so naming the configured cap would
+ * overstate how parallel the run actually is. This is how a human approving
+ * a long command list knows whether they run one after another or several at
+ * once before answering.
+ *
  * @throws {ConsentRequiredError} the interactive prompt was declined.
  */
 async function gateConsent(
@@ -1077,13 +1122,21 @@ async function gateConsent(
   yes: boolean,
   ci: boolean,
   spawnWorthy: readonly ExecutionStep[],
+  concurrency: number,
 ): Promise<void> {
   if (spawnWorthy.length === 0 || yes || ci) {
     return;
   }
 
   const commandList = spawnWorthy.map(describeStepForConsent).join("\n");
-  const prompt = `About to run ${String(spawnWorthy.length)} command(s):\n${commandList}`;
+  const achievableConcurrency = Math.min(concurrency, spawnWorthy.length);
+  const concurrencyNote =
+    achievableConcurrency === 1
+      ? "one at a time"
+      : `up to ${String(achievableConcurrency)} at a time`;
+  const prompt =
+    `About to run ${String(spawnWorthy.length)} command(s), ${concurrencyNote}:\n` +
+    commandList;
   const approved = await deps.confirm(prompt);
   if (!approved) {
     throw new ConsentRequiredError(
@@ -1143,7 +1196,7 @@ interface FilePlan {
  * pipeline this issue's design section names end to end.
  *
  * @throws {UsageError} an option was malformed, no `<fixture>` was given, or
- * `--format`/`--timeout` was given an invalid value.
+ * `--format`/`--timeout`/`--concurrency` was given an invalid value.
  * @throws {ConsentRequiredError} consent to spawn was not obtained.
  * (Also propagates every load-time error `loadSpecFile`/`loadFixtures` can
  * throw — see those modules' own documentation.)
@@ -1174,6 +1227,7 @@ async function runTest(args: readonly string[], deps: CliDeps): Promise<CliResul
     );
   }
   const timeoutOverrideMs = parseTimeoutOption(parsed.values.timeout);
+  const concurrencyOverride = parseConcurrencyOption(parsed.values.concurrency);
 
   const explicitSettings = parsed.values.settings;
   const sources = resolveSettingsSources(explicitSettings, deps);
@@ -1221,6 +1275,7 @@ async function runTest(args: readonly string[], deps: CliDeps): Promise<CliResul
       spec,
       timeoutOverrideMs,
       cliEnvNames,
+      concurrencyOverride,
     );
     const filePlan: FilePlan = {
       fixturePath,
@@ -1288,6 +1343,7 @@ async function runTest(args: readonly string[], deps: CliDeps): Promise<CliResul
     parsed.values.yes === true,
     parsed.values.ci === true,
     spawnWorthy,
+    concurrencyOverride ?? HOOKASSERT_DEFAULT_CONCURRENCY,
   );
 
   // Sequential, not `Promise.all`: each `executeHooks` call runs its own

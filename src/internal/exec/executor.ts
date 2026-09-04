@@ -53,8 +53,8 @@ export const HOOKASSERT_DEFAULT_TIMEOUT_MS = 10_000;
  * switching), and I/O-bound throughput keeps improving past `8` only with
  * sharply diminishing returns. A fixed default also keeps a run's behavior
  * independent of the machine it happens to run on. {@link ExecDeps.concurrency}
- * overrides this per run; wiring a `--concurrency` flag to it is a
- * CLI-surface addition left for a future change.
+ * overrides this per run; `test --concurrency <n>` in `src/cli.ts` is the CLI
+ * surface that sets it.
  */
 export const HOOKASSERT_DEFAULT_CONCURRENCY = 8;
 
