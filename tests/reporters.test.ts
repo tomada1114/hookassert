@@ -728,10 +728,15 @@ interface JsonCaseResultShape {
   readonly reasons?: readonly JsonUnknownReasonShape[];
   readonly decidedBy?: JsonDecidingHookShape | null;
 }
+interface JsonLaunchFailureShape {
+  readonly hook: { readonly command: string };
+  readonly launchError: string;
+}
 interface JsonTestCaseShape {
   readonly event: string;
   readonly tool: string | null;
   readonly result: JsonCaseResultShape;
+  readonly launchFailures: readonly JsonLaunchFailureShape[];
 }
 interface JsonTestReportForAssertions {
   readonly reportVersion: string;
@@ -760,6 +765,8 @@ describe("renderTestJson: schema validation against a real rendering", () => {
   const CMD_LAUNCH_FAIL = "cmd-launch-fail";
   const CMD_CONTEXT_MISMATCH = "cmd-context-mismatch";
   const CMD_UPDATED_INPUT_ABSENT = "cmd-updated-input-absent";
+  const CMD_MULTI_LAUNCH_FAIL = "cmd-multi-launch-fail";
+  const CMD_MULTI_DENY = "cmd-multi-deny";
 
   beforeAll(() => {
     projectDir = mkdtempSync(path.join(tmpdir(), "hookassert-reporters-test-schema-"));
@@ -785,6 +792,16 @@ describe("renderTestJson: schema validation against a real rendering", () => {
           // Issue #34: expect.context / expect.updatedInput diffs.
           commandGroup("Agent", CMD_CONTEXT_MISMATCH),
           commandGroup("AskUserQuestion", CMD_UPDATED_INPUT_ABSENT),
+          // Issue #65: two hooks under one matcher, one of which never
+          // launches — proves `launchFailures` is carried for a hook the
+          // verdict's fold did not pick.
+          {
+            matcher: "MultiHook",
+            hooks: [
+              { type: "command", command: CMD_MULTI_LAUNCH_FAIL, args: [] },
+              { type: "command", command: CMD_MULTI_DENY },
+            ],
+          },
         ],
         Notification: [commandGroup(undefined, CMD_NOTIFICATION_NOOP)],
       },
@@ -877,6 +894,10 @@ describe("renderTestJson: schema validation against a real rendering", () => {
         // fixture that expects the launch failure exactly still passes, and
         // decidedBy.launchError carries the OS-reported reason.
         { event: "PreToolUse", tool: "LaunchFail", expect: { decision: "error" } },
+        // "pass" — the deny (`CMD_MULTI_DENY`) wins the fold over its
+        // launch-failed sibling (issue #65): `launchFailures` carries the
+        // loser even though `decidedBy` never names it.
+        { event: "PreToolUse", tool: "MultiHook", expect: { decision: "deny" } },
         // "skipped", reason "dry-run".
         {
           event: "PreToolUse",
@@ -919,6 +940,11 @@ describe("renderTestJson: schema validation against a real rendering", () => {
           },
         ],
         [CMD_UPDATED_INPUT_ABSENT, { exitCode: 0, stdout: "not json" }],
+        [
+          CMD_MULTI_LAUNCH_FAIL,
+          { exitCode: -1, launchError: "spawn cmd-multi-launch-fail ENOENT" },
+        ],
+        [CMD_MULTI_DENY, { exitCode: 2 }],
       ]),
     );
 
@@ -934,7 +960,7 @@ describe("renderTestJson: schema validation against a real rendering", () => {
       },
     );
 
-    // 11 of the 16 cases fail — `resolveTestExitCode` returns 1 whenever
+    // 11 of the 17 cases fail — `resolveTestExitCode` returns 1 whenever
     // `summary.failed > 0`, regardless of `--ci`.
     expect(result.exitCode).toBe(1);
     const parsed: unknown = JSON.parse(result.stdout);
@@ -1018,6 +1044,37 @@ describe("renderTestJson: schema validation against a real rendering", () => {
     expect(launchFailedCase?.result.decidedBy?.launchError).toBe(
       "spawn cmd-launch-fail ENOENT",
     );
+    // Issue #65: the deciding hook's own launch failure is also carried on
+    // `launchFailures`, not only on `decidedBy`.
+    expect(launchFailedCase?.launchFailures).toHaveLength(1);
+    expect(launchFailedCase?.launchFailures[0]?.hook.command).toBe(CMD_LAUNCH_FAIL);
+    expect(launchFailedCase?.launchFailures[0]?.launchError).toBe(
+      "spawn cmd-launch-fail ENOENT",
+    );
+
+    // Issue #65: a launch failure on a hook the fold did not pick is still
+    // carried on `launchFailures`, even though `decidedBy` never names it.
+    const multiHookCase = report.cases.find(
+      (c) => c.event === "PreToolUse" && c.tool === "MultiHook",
+    );
+    expect(multiHookCase?.result.kind).toBe("pass");
+    expect(multiHookCase?.result.decidedBy?.launchError).toBeNull();
+    expect(multiHookCase?.launchFailures).toHaveLength(1);
+    expect(multiHookCase?.launchFailures[0]?.hook.command).toBe(CMD_MULTI_LAUNCH_FAIL);
+    expect(multiHookCase?.launchFailures[0]?.launchError).toBe(
+      "spawn cmd-multi-launch-fail ENOENT",
+    );
+
+    // Every case with no launch failure of its own carries an explicit
+    // empty array, never an absent key — `additionalProperties: false` plus
+    // a full `required` list on `testCaseReport` demands it. `LaunchFail`
+    // and `MultiHook` are the two cases that spawn a launch-failing hook.
+    const otherCases = report.cases.filter(
+      (c) => c.tool !== "MultiHook" && c.tool !== "LaunchFail",
+    );
+    for (const c of otherCases) {
+      expect(c.launchFailures).toEqual([]);
+    }
   });
 
   it("pretty and github both render the context and updatedInput diffs (issue #34)", async () => {

@@ -20,6 +20,7 @@ import type {
   ExpectationDiff,
   NonFiringExplanation,
   PayloadOrigin,
+  ResolvedHook,
   Summary,
   UnknownReason,
 } from "../../types.js";
@@ -30,6 +31,18 @@ import {
 } from "./github.js";
 import { toJsonHook, type JsonHook } from "./json.js";
 import type { ReportHeader } from "./summary.js";
+
+/**
+ * One hook that fired for a case and whose process never started at all,
+ * carried to the reporters so a launch failure is visible even on a hook the
+ * verdict's fold did not pick.
+ */
+export interface LaunchFailure {
+  /** The hook that never launched. */
+  readonly hook: ResolvedHook;
+  /** That hook's own `ExecOutcome.launchError` — the OS-reported reason. */
+  readonly launchError: string;
+}
 
 /** One fixture case's result, identified by which file and position it came from. */
 export interface TestCaseReport {
@@ -58,6 +71,24 @@ export interface TestCaseReport {
    * else needs.
    */
   readonly firedCount: number;
+
+  /**
+   * Every hook that fired for this case whose process never started, in
+   * firing order — including the deciding hook when its own process is one
+   * of them. Empty for a case where nothing fired, and for every stubbed
+   * step (`stub` bypasses the spawner, so it can never produce a
+   * `launchError`).
+   *
+   * @remarks
+   * Not part of `CaseResult`, for the reason `firedCount` above is not: it
+   * takes no part in the verdict — `assertCase` folds every firing hook's
+   * `Decision` into one verdict (#42) and a launch failure that loses that
+   * fold changes nothing about it — and only a reporter reads it. #39 gave
+   * the *deciding* hook's launch error its own home on `DecidingHook`; this
+   * is the same fact for every other firing hook, which the report was
+   * otherwise dropping entirely (#65).
+   */
+  readonly launchFailures: readonly LaunchFailure[];
 }
 
 /** The full result `test <fixture>...` renders. */
@@ -147,34 +178,38 @@ function describeDecidedBy(decidedBy: DecidingHook): string {
 
 /**
  * `hook never launched: <OS message> (command "<command>", <file>:<line>)` —
- * the message every reporter shows for a case whose deciding hook's process
- * never started at all (`DecidingHook.launchError` set). Already names the
- * hook and its declaration site, so callers never also append
- * {@link decidedBySuffix}'s "— decided by …" for the same `DecidingHook`.
+ * the message every reporter shows for one hook that fired for a case but
+ * whose process never started at all. Already names the hook and its
+ * declaration site, so callers never also append {@link decidedBySuffix}'s
+ * "— decided by …" for the same hook.
  */
-function describeLaunchFailure(
-  decidedBy: DecidingHook & { launchError: string },
-): string {
-  const { hook, launchError } = decidedBy;
+function describeLaunchFailure(failure: LaunchFailure): string {
+  const { hook, launchError } = failure;
   return `hook never launched: ${launchError} (command "${hook.command}", ${hook.provenance.file}:${String(hook.provenance.line)})`;
+}
+
+/** Every {@link TestCaseReport.launchFailures} entry, rendered in firing order. */
+function describeLaunchFailures(report: TestCaseReport): string[] {
+  return report.launchFailures.map(describeLaunchFailure);
 }
 
 /**
  * ` — decided by …` suffix for a `FAIL`/`UNKNOWN` line, shown only when more
  * than one hook fired for the case — naming the hook for a single-hook case
- * would just repeat what the line already says. `detailNamesHook` suppresses
- * it for the one line whose detail has already named the hook itself, a
- * `FAIL` rendered by {@link describeLaunchFailure}; an `UNKNOWN` line never
- * carries that message — a launch failure whose event is missing from the
- * spec resolves to `unknown` before `launchError` is ever read — so it keeps
- * the suffix regardless of the deciding hook's `launchError`.
+ * would just repeat what the line already says — and suppressed when the
+ * deciding hook's own process never started: that hook's launch-failure
+ * segment (from {@link describeLaunchFailures}) already names it and its
+ * declaration site, so the suffix would only repeat it.
  */
 function decidedBySuffix(
   report: TestCaseReport,
   decidedBy: DecidingHook | undefined,
-  detailNamesHook: boolean,
 ): string {
-  if (decidedBy === undefined || report.firedCount <= 1 || detailNamesHook) {
+  if (
+    decidedBy === undefined ||
+    report.firedCount <= 1 ||
+    decidedBy.launchError !== undefined
+  ) {
     return "";
   }
   return ` — decided by ${describeDecidedBy(decidedBy)}`;
@@ -182,38 +217,43 @@ function decidedBySuffix(
 
 /**
  * The detail text after a `FAIL` line's label, for a case whose combined
- * verdict is a `"fail"`: the launch-failure message when the deciding hook
- * never launched, otherwise the ordinary diff/non-firing explanation.
+ * verdict is a `"fail"`: every fired hook's launch-failure message first
+ * (root cause before consequence), then the ordinary diff/non-firing
+ * explanation — never one replacing the other.
  */
-function describeFailDetail(result: Extract<CaseResult, { kind: "fail" }>): string {
-  const { decidedBy } = result;
-  if (decidedBy?.launchError !== undefined) {
-    return describeLaunchFailure({ ...decidedBy, launchError: decidedBy.launchError });
-  }
-  return result.nonFiring === undefined
-    ? result.diffs.map(describeDiff).join("; ")
-    : describeNonFiring(result.nonFiring);
+function describeFailDetail(
+  report: TestCaseReport & { readonly result: Extract<CaseResult, { kind: "fail" }> },
+): string {
+  const { result } = report;
+  const detailSegments =
+    result.nonFiring === undefined
+      ? result.diffs.map(describeDiff)
+      : [describeNonFiring(result.nonFiring)];
+  return [...describeLaunchFailures(report), ...detailSegments].join("; ");
 }
 
 /** One human-readable line per {@link TestCaseReport}, for `renderTestPretty`. */
 function renderCaseLine(report: TestCaseReport): string {
   const label = caseLabel(report);
   const { result } = report;
+  const launchSegments = describeLaunchFailures(report);
   switch (result.kind) {
     case "pass":
-      return `PASS  ${label}`;
+      return launchSegments.length === 0
+        ? `PASS  ${label}`
+        : `PASS  ${label} — ${launchSegments.join("; ")}`;
     case "skipped":
       return `SKIP  ${label} (${result.reason})`;
     case "unknown": {
-      const reasons = result.reasons.map(describeUnknownReason).join("; ");
-      return `UNKNOWN ${label} — ${reasons}${decidedBySuffix(report, result.decidedBy, false)}`;
+      const detail = [
+        ...launchSegments,
+        ...result.reasons.map(describeUnknownReason),
+      ].join("; ");
+      return `UNKNOWN ${label} — ${detail}${decidedBySuffix(report, result.decidedBy)}`;
     }
     case "fail": {
-      const detail = describeFailDetail(result);
-      // The launch-failure detail already names the hook and its declaration
-      // site, so the suffix would only repeat it.
-      const detailNamesHook = result.decidedBy?.launchError !== undefined;
-      return `FAIL  ${label} — ${detail}${decidedBySuffix(report, result.decidedBy, detailNamesHook)}`;
+      const detail = describeFailDetail({ ...report, result });
+      return `FAIL  ${label} — ${detail}${decidedBySuffix(report, result.decidedBy)}`;
     }
   }
 }
@@ -450,6 +490,22 @@ function toJsonCaseResult(result: CaseResult): JsonCaseResult {
   }
 }
 
+/**
+ * JSON shape of a {@link LaunchFailure}, with its own `hook` converted
+ * through `json.ts`'s {@link toJsonHook} for the same reason
+ * {@link JsonDecidingHook} is: a raw `ResolvedHook`'s `matcher`/`args`/
+ * `timeoutMs` are `T | undefined`, which `JSON.stringify` would drop.
+ */
+interface JsonLaunchFailure {
+  readonly hook: JsonHook;
+  readonly launchError: string;
+}
+
+/** Build the {@link JsonLaunchFailure} for one {@link LaunchFailure}. */
+function toJsonLaunchFailure(failure: LaunchFailure): JsonLaunchFailure {
+  return { hook: toJsonHook(failure.hook), launchError: failure.launchError };
+}
+
 /** JSON-serializable shape one {@link TestCaseReport} renders to. */
 interface JsonTestCaseReport {
   readonly file: string;
@@ -457,6 +513,7 @@ interface JsonTestCaseReport {
   readonly event: EventName;
   readonly tool: string | null;
   readonly result: JsonCaseResult;
+  readonly launchFailures: readonly JsonLaunchFailure[];
 }
 
 /**
@@ -500,6 +557,7 @@ export function toJsonTestReport(report: TestReport): JsonTestReport {
       event: caseReport.event,
       tool: caseReport.tool ?? null,
       result: toJsonCaseResult(caseReport.result),
+      launchFailures: caseReport.launchFailures.map(toJsonLaunchFailure),
     })),
     summary: report.summary,
   };
@@ -521,58 +579,106 @@ function attachesInWorkspace(file: string, workspaceRoot: string): boolean {
   return !relative.startsWith("/") && !/^[A-Za-z]:\//.test(relative);
 }
 
+/** What {@link caseAnnotation} decided about one case's `github` annotation. */
+interface CaseAnnotation {
+  readonly level: "error" | "warning";
+  readonly location: { readonly file: string; readonly line: number };
+  readonly message: string;
+}
+
 /**
- * Render a {@link TestReport} as GitHub Actions workflow commands: the
- * leading header line, then one `::error` per `"fail"` case.
+ * Decide the `github` annotation for one {@link TestCaseReport}, or
+ * `undefined` for a case that gets no annotation at all: an `::error` for a
+ * `"fail"` verdict, an `::warning` for a non-`"fail"` case that still carries
+ * a launch failure (some other firing hook's own `Decision` outranked the
+ * launch-failed one, so `assertCase`'s fold never saw it), otherwise none.
+ * `::error` is deliberately never used for a passing case: the run's exit
+ * code is `0` there, and a red annotation on a green run would report a
+ * failure the verdict did not reach.
  *
  * @remarks
  * A fixture case carries no line number of its own the way a `ResolvedHook`
  * does through `Provenance` — `fixture/load.ts` never records one — so every
  * annotation points at line 1 of its fixture file, identified instead by the
  * case's own 0-based index and event/target in the annotation's title,
- * *unless* the failure names a `decidedBy` hook — a hook fired and its own
- * `Decision` decided the case's verdict — in which case the annotation
- * points at that hook's own `Provenance` instead, the more actionable
- * location. A deciding hook declared outside the workspace (the user layer's
- * `~/.claude/settings.json`, or the enterprise layer's) is the exception: an
- * annotation whose `file=` is not inside `GITHUB_WORKSPACE` silently attaches
- * to nothing, so the annotation stays on the fixture — which is inside the
- * checkout — and names the deciding hook in its message instead.
+ * *unless* the annotation names a hook — the `"fail"` branch's `decidedBy`,
+ * or the `"warning"` branch's first {@link TestCaseReport.launchFailures}
+ * entry — in which case the annotation points at that hook's own
+ * `Provenance` instead, the more actionable location. A hook declared
+ * outside the workspace (the user layer's `~/.claude/settings.json`, or the
+ * enterprise layer's) is the exception: an annotation whose `file=` is not
+ * inside `GITHUB_WORKSPACE` silently attaches to nothing, so the annotation
+ * stays on the fixture — which is inside the checkout.
  */
-export function renderTestGithub(report: TestReport, workspaceRoot: string): string {
-  const lines: string[] = [renderGithubHeader(report.header)];
-
-  for (const caseReport of report.cases) {
-    if (caseReport.result.kind !== "fail") {
-      continue;
-    }
-    const { result } = caseReport;
-    const detail = describeFailDetail(result);
+function caseAnnotation(
+  caseReport: TestCaseReport,
+  workspaceRoot: string,
+): CaseAnnotation | undefined {
+  const { result } = caseReport;
+  if (result.kind === "fail") {
+    const detail = describeFailDetail({ ...caseReport, result });
     const { decidedBy } = result;
     const attachable =
       decidedBy !== undefined &&
       attachesInWorkspace(decidedBy.hook.provenance.file, workspaceRoot);
     const location = attachable
-      ? {
-          file: decidedBy.hook.provenance.file,
-          line: decidedBy.hook.provenance.line,
-        }
+      ? { file: decidedBy.hook.provenance.file, line: decidedBy.hook.provenance.line }
       : { file: caseReport.file, line: 1 };
-    // Never appends "— decided by …" when the hook never launched: `detail`
-    // already names the hook and its declaration site (see
+    // Never appends "— decided by …" when the deciding hook never launched:
+    // `detail` already names it and its declaration site (see
     // `describeLaunchFailure`), so the annotation would otherwise repeat
     // itself.
     const message =
       decidedBy === undefined || attachable || decidedBy.launchError !== undefined
         ? detail
         : `${detail} — decided by ${describeDecidedBy(decidedBy)}`;
+    return { level: "error", location, message };
+  }
+
+  const [firstLaunchFailure] = caseReport.launchFailures;
+  if (firstLaunchFailure === undefined) {
+    return undefined;
+  }
+  const attachable = attachesInWorkspace(
+    firstLaunchFailure.hook.provenance.file,
+    workspaceRoot,
+  );
+  const location = attachable
+    ? {
+        file: firstLaunchFailure.hook.provenance.file,
+        line: firstLaunchFailure.hook.provenance.line,
+      }
+    : { file: caseReport.file, line: 1 };
+  return {
+    level: "warning",
+    location,
+    message: describeLaunchFailures(caseReport).join("; "),
+  };
+}
+
+/**
+ * Render a {@link TestReport} as GitHub Actions workflow commands: the
+ * leading header line, then one annotation per case {@link caseAnnotation}
+ * decides needs one — an `::error` for every `"fail"` case, an `::warning`
+ * for a non-`"fail"` case with a launch failure `assertCase`'s fold did not
+ * pick.
+ */
+export function renderTestGithub(report: TestReport, workspaceRoot: string): string {
+  const lines: string[] = [renderGithubHeader(report.header)];
+
+  for (const caseReport of report.cases) {
+    const annotation = caseAnnotation(caseReport, workspaceRoot);
+    if (annotation === undefined) {
+      continue;
+    }
     lines.push(
       renderGithubFinding(
         {
-          file: location.file,
-          line: location.line,
+          file: annotation.location.file,
+          line: annotation.location.line,
           title: `test case #${String(caseReport.index)}: ${caseLabel(caseReport)}`,
-          message,
+          message: annotation.message,
+          level: annotation.level,
         },
         workspaceRoot,
       ),
