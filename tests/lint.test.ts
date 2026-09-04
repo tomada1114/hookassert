@@ -951,7 +951,7 @@ describe("readHookCommands: agreement with the strict loader", () => {
 
     expect(fixtureFiles.length).toBeGreaterThan(0);
 
-    let comparedAtLeastOne = false;
+    let hookTuplesCompared = 0;
     for (const file of fixtureFiles) {
       const source: SettingsSource = { path: file, layer: "project" };
 
@@ -963,7 +963,7 @@ describe("readHookCommands: agreement with the strict loader", () => {
         continue;
       }
 
-      comparedAtLeastOne = true;
+      hookTuplesCompared += strictHooks.length;
       const tolerantCommands = readHookCommands(source);
       expect(
         tolerantCommands.map((command) => [
@@ -982,7 +982,14 @@ describe("readHookCommands: agreement with the strict loader", () => {
       );
     }
 
-    expect(comparedAtLeastOne).toBe(true);
+    // A fixture set that yields zero hooks on both sides (every accepted
+    // fixture happens to declare no `hooks` key) would satisfy a
+    // files-were-compared guard while never exercising the tuple comparison
+    // above. Require at least one actual (event, command, args, line) tuple
+    // to have been compared, so a strict loader that started rejecting every
+    // hook-bearing fixture would fail this assertion instead of passing
+    // vacuously.
+    expect(hookTuplesCompared).toBeGreaterThan(0);
   });
 });
 

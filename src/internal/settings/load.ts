@@ -12,8 +12,8 @@
 import type { Node } from "jsonc-parser";
 
 import type { EventName, Provenance } from "../../types.js";
-import { SettingsParseError } from "../errors.js";
 import {
+  fail,
   getProperty,
   isEventName,
   positionAt,
@@ -46,9 +46,8 @@ function requirePositiveNumber(
   const value = requireNumber(node, source, description);
   if (!Number.isFinite(value) || value <= 0) {
     const { line } = positionAt(text, node.offset);
-    throw new SettingsParseError(
-      source.path,
-      source.layer,
+    fail(
+      source,
       `${description} at line ${String(line)} must be a positive number of seconds, got ${String(value)}`,
     );
   }
