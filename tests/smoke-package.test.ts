@@ -261,10 +261,15 @@ describe("checkCliFixtureUsage", () => {
     expect(runNodeMock).not.toHaveBeenCalled();
   });
 
-  it("writes a one-hook fixture and runs explain then lint against it", () => {
+  const explainJsonWithFiring = JSON.stringify({
+    firing: [{ command: "echo hookassert-smoke-ok" }],
+    rejected: [],
+  });
+
+  it("writes a one-hook fixture and runs explain then lint against it, isolated from the real HOME", () => {
     runNodeMock.mockReturnValue({
       status: 0,
-      stdout: "  echo hookassert-smoke-ok\n",
+      stdout: explainJsonWithFiring,
       stderr: "",
     });
     const consumer = makeConsumer();
@@ -273,7 +278,8 @@ describe("checkCliFixtureUsage", () => {
       bin: { hookassert: "./dist/cli.js" },
     });
 
-    const settingsPath = path.join(consumer, "fixture-project", "settings.json");
+    const projectDir = path.join(consumer, "fixture-project");
+    const settingsPath = path.join(projectDir, "settings.json");
     expect(JSON.parse(readFileSync(settingsPath, "utf8")) as unknown).toMatchObject({
       hooks: {
         PreToolUse: [
@@ -285,23 +291,57 @@ describe("checkCliFixtureUsage", () => {
       },
     });
 
+    const scratchHome = path.join(consumer, "smoke-home");
     const executable = path.join(consumer, "node_modules", ".bin", "hookassert");
     expect(runNodeMock).toHaveBeenNthCalledWith(
       1,
       executable,
-      ["explain", "PreToolUse", "Bash", "--settings", settingsPath],
-      expect.objectContaining({ cwd: consumer }),
+      ["explain", "PreToolUse", "Bash", "--settings", settingsPath, "--format", "json"],
+      expect.objectContaining({
+        cwd: projectDir,
+        env: expect.objectContaining({
+          HOME: scratchHome,
+          USERPROFILE: scratchHome,
+        }) as unknown,
+      }),
     );
     expect(runNodeMock).toHaveBeenNthCalledWith(
       2,
       executable,
       ["lint", "--settings", settingsPath],
-      expect.objectContaining({ cwd: consumer }),
+      expect.objectContaining({
+        cwd: projectDir,
+        env: expect.objectContaining({
+          HOME: scratchHome,
+          USERPROFILE: scratchHome,
+        }) as unknown,
+      }),
     );
   });
 
-  it("throws ERR_SMOKE_CLI_EXPLAIN_FAILED when explain fails or omits the fixture hook", () => {
+  it("throws ERR_SMOKE_CLI_EXPLAIN_FAILED when explain fails", () => {
     runNodeMock.mockReturnValue({ status: 1, stdout: "", stderr: "boom" });
+    const consumer = makeConsumer();
+
+    expect(() =>
+      checkCliFixtureUsage(consumer, "hookassert", {
+        bin: { hookassert: "./dist/cli.js" },
+      }),
+    ).toThrow(/ERR_SMOKE_CLI_EXPLAIN_FAILED/);
+    expect(runNodeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("throws ERR_SMOKE_CLI_EXPLAIN_FAILED when explain exits 0 but the fixture hook is not firing", () => {
+    runNodeMock.mockReturnValue({
+      status: 0,
+      stdout: JSON.stringify({
+        firing: [],
+        rejected: [
+          { hook: { command: "echo hookassert-smoke-ok" }, reason: "did not match" },
+        ],
+      }),
+      stderr: "",
+    });
     const consumer = makeConsumer();
 
     expect(() =>
@@ -316,7 +356,7 @@ describe("checkCliFixtureUsage", () => {
     runNodeMock.mockImplementation((_script, args) =>
       args[0] === "lint"
         ? { status: 1, stdout: "", stderr: "boom" }
-        : { status: 0, stdout: "echo hookassert-smoke-ok", stderr: "" },
+        : { status: 0, stdout: explainJsonWithFiring, stderr: "" },
     );
     const consumer = makeConsumer();
 

@@ -55,3 +55,5 @@ Initial release.
   probe used to resolve `undetermined`.
 - A black-box conformance harness proving the CLI's observable behavior — output,
   exit codes, and report shapes — against recorded transcripts.
+
+[0.1.0]: https://github.com/tomada1114/hookassert/releases/tag/v0.1.0

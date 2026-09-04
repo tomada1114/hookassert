@@ -487,6 +487,17 @@ export function checkBinCommands(consumer, packageName, manifest) {
  * the two commands *run* against a real settings file, not about whether
  * lint's own rules are correct — that is `tests/cli.test.ts`'s job.
  *
+ * Both invocations run with `HOME`/`USERPROFILE` pointed at an empty scratch
+ * directory under the throwaway consumer, and `cwd` set to the fixture
+ * project directory. `--settings` is additive, not exclusive
+ * (`discoverSources`, `src/internal/settings/discover.ts`, always prepends
+ * the user layer at `{home}/.claude/settings.json` and the project/local
+ * layers at `{cwd}/.claude/settings.json(.local)`), and `runNode` otherwise
+ * defaults to `process.env`/the invoking machine's real home. Without this,
+ * the check would lint — and print — whatever hook settings happen to sit in
+ * the developer's or CI runner's own `~/.claude`, rather than only the
+ * fixture the check controls.
+ *
  * Specific to hookassert's own subcommands on purpose: skipped entirely for
  * a packed manifest that does not declare the `hookassert` bin command, so
  * this stays inert rather than false-failing for anything else built on
@@ -533,28 +544,47 @@ export function checkCliFixtureUsage(consumer, packageName, manifest) {
 
   const executable = path.join(consumer, "node_modules", ".bin", "hookassert");
 
+  // An empty scratch HOME, isolated from the invoking machine's own
+  // `~/.claude/settings.json` — see the remark above for why this matters.
+  const scratchHome = path.join(consumer, "smoke-home");
+  mkdirSync(scratchHome, { recursive: true });
+  const isolatedEnv = { ...process.env, HOME: scratchHome, USERPROFILE: scratchHome };
+  const isolatedOptions = { cwd: projectDir, env: isolatedEnv };
+
   const explainResult = runNode(
     executable,
-    ["explain", "PreToolUse", "Bash", "--settings", settingsPath],
-    { cwd: consumer },
+    ["explain", "PreToolUse", "Bash", "--settings", settingsPath, "--format", "json"],
+    isolatedOptions,
   );
-  if (
-    explainResult.status !== 0 ||
-    !explainResult.stdout.includes("echo hookassert-smoke-ok")
-  ) {
+  /** @type {unknown} */
+  let firing;
+  if (explainResult.status === 0) {
+    try {
+      firing = readKey(parseJson(explainResult.stdout), "firing");
+    } catch {
+      firing = undefined;
+    }
+  }
+  const fixtureFired =
+    Array.isArray(firing) &&
+    firing.some((hook) => readString(hook, "command") === "echo hookassert-smoke-ok");
+  if (explainResult.status !== 0 || !fixtureFired) {
     fail("ERR_SMOKE_CLI_EXPLAIN_FAILED", {
-      what: "`hookassert explain` did not report the fixture project's firing hook.",
+      what: "`hookassert explain` did not report the fixture project's hook as firing.",
       subject: settingsPath,
-      expected: "exit 0, with the fixture hook's command in the firing-hooks list",
+      expected:
+        'exit 0, with a firing[] entry whose "command" is "echo hookassert-smoke-ok"',
       actual: `exit ${String(explainResult.status)}\n${excerpt(explainResult.stderr || explainResult.stdout)}`,
-      next: "Run `hookassert explain PreToolUse Bash --settings <file>` against the installed tarball by hand.",
+      next: "Run `hookassert explain PreToolUse Bash --settings <file> --format json` against the installed tarball by hand.",
     });
   }
   process.stdout.write(explainResult.stdout);
 
-  const lintResult = runNode(executable, ["lint", "--settings", settingsPath], {
-    cwd: consumer,
-  });
+  const lintResult = runNode(
+    executable,
+    ["lint", "--settings", settingsPath],
+    isolatedOptions,
+  );
   if (lintResult.status !== 0) {
     fail("ERR_SMOKE_CLI_LINT_FAILED", {
       what: "`hookassert lint` did not pass against a clean fixture project.",
