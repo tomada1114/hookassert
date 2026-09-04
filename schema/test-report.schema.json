@@ -430,16 +430,29 @@
         }
       ]
     },
+    "launchFailure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hook", "launchError"],
+      "properties": {
+        "hook": { "$ref": "#/$defs/hook" },
+        "launchError": { "type": "string" }
+      }
+    },
     "testCaseReport": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["file", "index", "event", "tool", "result"],
+      "required": ["file", "index", "event", "tool", "result", "launchFailures"],
       "properties": {
         "file": { "type": "string", "minLength": 1 },
         "index": { "type": "integer", "minimum": 0 },
         "event": { "type": "string", "minLength": 1 },
         "tool": { "type": ["string", "null"] },
-        "result": { "$ref": "#/$defs/caseResult" }
+        "result": { "$ref": "#/$defs/caseResult" },
+        "launchFailures": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/launchFailure" }
+        }
       }
     },
     "summary": {
