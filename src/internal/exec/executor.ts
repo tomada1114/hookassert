@@ -258,8 +258,9 @@ export interface ExecDeps {
   readonly specDefaultTimeoutMs: number;
 
   /**
-   * A default timeout the caller declared explicitly (`test`'s own
-   * `--timeout <ms>`), rather than one hookassert computed on its own.
+   * A default timeout the caller declared explicitly — `test`'s own
+   * `--timeout <ms>`, or a fixture file's own `defaults.timeoutMs` — rather
+   * than one hookassert computed on its own.
    *
    * @remarks
    * When present, this is the default {@link buildSpawnRequest} uses for a
@@ -267,12 +268,13 @@ export interface ExecDeps {
    * {@link resolveDefaultTimeoutMs}'s ceiling against `specDefaultTimeoutMs`
    * entirely, the same exemption a hook's own declared `timeoutMs` already
    * gets (see `buildSpawnRequest`'s own remark). A value the user typed on
-   * the command line is at least as explicit as one written into a hook's
-   * `settings.json` entry: hookassert's ceiling exists to bound the case
-   * where nobody said how long is acceptable, not to second-guess a duration
-   * the user actually asked for. `undefined` when `--timeout` was not given,
-   * in which case the computed default is still `min(hookassert's default,
-   * spec.defaults.hookTimeoutMs)`, unchanged.
+   * the command line, or wrote into a fixture file's own `defaults`, is at
+   * least as explicit as one written into a hook's `settings.json` entry:
+   * hookassert's ceiling exists to bound the case where nobody said how long
+   * is acceptable, not to second-guess a duration the user actually asked
+   * for. `undefined` when neither `--timeout` nor a fixture file's own
+   * `defaults.timeoutMs` was given, in which case the computed default is
+   * still `min(hookassert's default, spec.defaults.hookTimeoutMs)`, unchanged.
    */
   readonly explicitDefaultTimeoutMs?: number;
 
