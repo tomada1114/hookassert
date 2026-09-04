@@ -467,6 +467,107 @@ export function checkBinCommands(consumer, packageName, manifest) {
 }
 
 /**
+ * Exercise `explain` and `lint` against a tiny fixture project, once
+ * `checkBinCommands` has already proven `--help` works.
+ *
+ * @remarks
+ * `--help` and the type-only import check both pass even when the settings
+ * loader is broken — neither one ever reads a real settings file. This is
+ * the check that would have caught a missing runtime dependency
+ * (`jsonc-parser`, `yaml`) or a broken `bin` entry point once given
+ * something real to load: it writes a one-hook fixture settings file into
+ * the consumer, then runs `explain` and `lint` against it exactly the way a
+ * user's own project would.
+ *
+ * The fixture's hook command is `echo hookassert-smoke-ok` — `echo` is a
+ * shell builtin, so `lint`'s `command-not-found` rule (and the
+ * shebang/executable-bit rules downstream of it) never try to resolve it on
+ * disk. The matcher `"Bash"` is a single, correctly-cased literal, so no
+ * matcher rule fires either. A clean fixture keeps this check about whether
+ * the two commands *run* against a real settings file, not about whether
+ * lint's own rules are correct — that is `tests/cli.test.ts`'s job.
+ *
+ * Specific to hookassert's own subcommands on purpose: skipped entirely for
+ * a packed manifest that does not declare the `hookassert` bin command, so
+ * this stays inert rather than false-failing for anything else built on
+ * this template.
+ *
+ * @param {string} consumer - Consumer directory, already past `checkBinCommands`.
+ * @param {string} packageName - Installed package name.
+ * @param {unknown} manifest - Installed package manifest.
+ * @returns {void}
+ * @throws {SmokeError} When `explain` or `lint` fails against the fixture.
+ *
+ * @remarks
+ * Exported so `tests/smoke-package.test.ts` can exercise both outcomes
+ * directly; see {@link checkRuntimeImports} for why `runNode` is the
+ * boundary mocked rather than a real tarball install.
+ */
+export function checkCliFixtureUsage(consumer, packageName, manifest) {
+  if (!publicBinCommands(manifest, packageName).includes("hookassert")) {
+    step("skipping the explain/lint fixture check: no hookassert bin command");
+    return;
+  }
+
+  step("exercising explain and lint against a tiny fixture project");
+  const projectDir = path.join(consumer, "fixture-project");
+  mkdirSync(projectDir, { recursive: true });
+  const settingsPath = path.join(projectDir, "settings.json");
+  writeFileSync(
+    settingsPath,
+    `${JSON.stringify(
+      {
+        hooks: {
+          PreToolUse: [
+            {
+              matcher: "Bash",
+              hooks: [{ type: "command", command: "echo hookassert-smoke-ok" }],
+            },
+          ],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+
+  const executable = path.join(consumer, "node_modules", ".bin", "hookassert");
+
+  const explainResult = runNode(
+    executable,
+    ["explain", "PreToolUse", "Bash", "--settings", settingsPath],
+    { cwd: consumer },
+  );
+  if (
+    explainResult.status !== 0 ||
+    !explainResult.stdout.includes("echo hookassert-smoke-ok")
+  ) {
+    fail("ERR_SMOKE_CLI_EXPLAIN_FAILED", {
+      what: "`hookassert explain` did not report the fixture project's firing hook.",
+      subject: settingsPath,
+      expected: "exit 0, with the fixture hook's command in the firing-hooks list",
+      actual: `exit ${String(explainResult.status)}\n${excerpt(explainResult.stderr || explainResult.stdout)}`,
+      next: "Run `hookassert explain PreToolUse Bash --settings <file>` against the installed tarball by hand.",
+    });
+  }
+  process.stdout.write(explainResult.stdout);
+
+  const lintResult = runNode(executable, ["lint", "--settings", settingsPath], {
+    cwd: consumer,
+  });
+  if (lintResult.status !== 0) {
+    fail("ERR_SMOKE_CLI_LINT_FAILED", {
+      what: "`hookassert lint` did not pass against a clean fixture project.",
+      subject: settingsPath,
+      expected: "exit 0, with no findings",
+      actual: `exit ${String(lintResult.status)}\n${excerpt(lintResult.stderr || lintResult.stdout)}`,
+      next: "Run `hookassert lint --settings <file>` against the installed tarball by hand.",
+    });
+  }
+  process.stdout.write(lintResult.stdout);
+}
+
+/**
  * A CommonJS consumer resolves the package and its manifest.
  *
  * @remarks
@@ -887,6 +988,7 @@ export function main(argv) {
       readKey(installedManifest, "bin") !== undefined,
     );
     checkBinCommands(consumer, packageName, installedManifest);
+    checkCliFixtureUsage(consumer, packageName, installedManifest);
     checkRequireInterop(
       consumer,
       packageName,
