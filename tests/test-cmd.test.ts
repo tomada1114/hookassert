@@ -1408,6 +1408,54 @@ describe("--timeout", () => {
     const hookCall = spawner.calls.find((call) => call.command !== "claude");
     expect(hookCall?.timeoutMs).toBe(900_000);
   });
+
+  it.each(["0", "-1", "abc", ""])(
+    "rejects --timeout %j with ERR_USAGE and spawns nothing",
+    async (value) => {
+      const spawner = new FakeSpawner();
+      const fixturePath = writeFixture({
+        cases: [{ event: "PreToolUse", tool: "Bash", expect: { decision: "pass" } }],
+      });
+
+      const result = await runCli(
+        [
+          "test",
+          fixturePath,
+          "--claude-version",
+          "2.1.300",
+          "--yes",
+          "--timeout",
+          value,
+        ],
+        "hookassert",
+        testDeps({ spawner }),
+      );
+
+      expect(result.exitCode).toBe(4);
+      expect(result.stderr).toContain("ERR_USAGE");
+      expect(spawner.calls).toHaveLength(0);
+    },
+  );
+
+  // Unlike --concurrency 1.5 (rejected: an integer check), --timeout uses a
+  // plain Number(value), so a fractional millisecond count is accepted.
+  // Pinning that difference, not "fixing" it, is this test's point.
+  it("accepts a fractional --timeout, unlike --concurrency", async () => {
+    const spawner = new FakeSpawner();
+    const fixturePath = writeFixture({
+      cases: [{ event: "PreToolUse", tool: "Bash", expect: { decision: "pass" } }],
+    });
+
+    const result = await runCli(
+      ["test", fixturePath, "--claude-version", "2.1.300", "--yes", "--timeout", "1.5"],
+      "hookassert",
+      testDeps({ spawner }),
+    );
+
+    expect(result.exitCode).toBe(0);
+    const hookCall = spawner.calls.find((call) => call.command !== "claude");
+    expect(hookCall?.timeoutMs).toBe(1.5);
+  });
 });
 
 describe("a fixture file's own defaults.timeoutMs", () => {
