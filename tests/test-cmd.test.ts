@@ -173,6 +173,10 @@ interface JsonTestCase {
     readonly reason?: string;
     readonly decidedBy?: JsonDecidedBy | null;
   };
+  readonly launchFailures: readonly {
+    readonly hook: { readonly command: string };
+    readonly launchError: string;
+  }[];
 }
 
 interface JsonTestReportShape {
@@ -349,8 +353,8 @@ describe("launch failures (issue #39)", () => {
   it("pretty prints the launch-failure message and github annotates the hook's own declaration line", async () => {
     setUpLaunchFailProject();
     // Expects something a launch failure cannot satisfy, so the case fails
-    // and the launch message — not the raw exitCode/decision diff — is what
-    // both reporters show.
+    // and the launch message is shown alongside the raw exitCode diff — the
+    // launch failure never replaces it (issue #65).
     const fixturePath = launchFailFixturePath({
       cases: [{ event: "PreToolUse", tool: "LaunchFail", expect: { exitCode: 0 } }],
     });
@@ -364,6 +368,7 @@ describe("launch failures (issue #39)", () => {
     expect(pretty.stdout).toContain("hook never launched: spawn python33 ENOENT");
     expect(pretty.stdout).toContain('command "python33"');
     expect(pretty.stdout).toMatch(/settings\.json:\d+\)/);
+    expect(pretty.stdout).toContain("exitCode: expected 0, got -1");
     // The launch message already names the hook and its location, so the
     // "decided by" suffix (only relevant for multi-hook cases anyway) never
     // doubles up on it.
@@ -384,6 +389,420 @@ describe("launch failures (issue #39)", () => {
     );
     expect(github.stdout).toMatch(/::error file=\.claude\/settings\.json,line=\d+/);
     expect(github.stdout).toContain("hook never launched: spawn python33 ENOENT");
+  });
+});
+
+describe("a non-deciding hook's launch failure (issue #65)", () => {
+  // Two hooks, one per settings layer, so they do not collapse on
+  // `dedupeKey` — reusing #42's two-layer helpers with a `FakeSpawner` whose
+  // canned outcome for one script carries `launchError`.
+  let launchFailureProjectDir: string;
+  let launchFailureHomeDir: string;
+
+  afterEach(() => {
+    rmSync(launchFailureProjectDir, { recursive: true, force: true });
+    rmSync(launchFailureHomeDir, { recursive: true, force: true });
+  });
+
+  function settingsDeclaring(script: string): unknown {
+    return {
+      hooks: {
+        PreToolUse: [
+          {
+            matcher: "Bash",
+            hooks: [{ type: "command", command: process.execPath, args: [script] }],
+          },
+        ],
+      },
+    };
+  }
+
+  /** One hook in the user layer, one in the project layer, each running `userScript`/`projectScript`. */
+  function setUpTwoLayers(userScript: string, projectScript: string): void {
+    launchFailureProjectDir = mkdtempSync(
+      path.join(tmpdir(), "hookassert-launch-failure-project-"),
+    );
+    launchFailureHomeDir = mkdtempSync(
+      path.join(tmpdir(), "hookassert-launch-failure-home-"),
+    );
+    mkdirSync(path.join(launchFailureProjectDir, ".claude"), { recursive: true });
+    mkdirSync(path.join(launchFailureHomeDir, ".claude"), { recursive: true });
+    writeFileSync(
+      path.join(launchFailureHomeDir, ".claude", "settings.json"),
+      JSON.stringify(settingsDeclaring(userScript), null, 2),
+    );
+    writeFileSync(
+      path.join(launchFailureProjectDir, ".claude", "settings.json"),
+      JSON.stringify(settingsDeclaring(projectScript), null, 2),
+    );
+  }
+
+  function fixturePath(expect_: unknown): string {
+    const filePath = path.join(launchFailureProjectDir, "fixture.yaml");
+    writeFileSync(
+      filePath,
+      JSON.stringify(
+        { cases: [{ event: "PreToolUse", tool: "Bash", expect: expect_ }] },
+        null,
+        2,
+      ),
+    );
+    return filePath;
+  }
+
+  const LAUNCH_ERROR = "spawn cmd-launch-fail ENOENT";
+
+  it("a launch failure on a hook the deny outranks is reported and the case still passes", async () => {
+    // User layer never launches; project layer denies (exit 2). The deny
+    // wins the fold (#42), so the case passes despite carrying a launch
+    // failure that lost that fold — the Question 4 answer, pinned.
+    setUpTwoLayers(EXIT0_SILENT, EXIT2_STDERR);
+    const spawner = new FakeSpawner(
+      new Map([
+        [EXIT0_SILENT, { exitCode: -1, launchError: LAUNCH_ERROR }],
+        [EXIT2_STDERR, { exitCode: 2, stderr: "blocked by policy\n" }],
+      ]),
+    );
+    const fp = fixturePath({ decision: "deny" });
+
+    const result = await runCli(
+      ["test", fp, "--claude-version", "2.1.300", "--yes", "--format", "json"],
+      "hookassert",
+      testDeps({ cwd: launchFailureProjectDir, home: launchFailureHomeDir, spawner }),
+    );
+
+    expect(result.exitCode).toBe(0);
+    const report = parseJsonReport(result.stdout);
+    expect(report.summary.failed).toBe(0);
+    const caseResult = report.cases[0];
+    expect(caseResult?.result.kind).toBe("pass");
+    expect(caseResult?.result.decidedBy?.decision.kind).toBe("deny");
+    expect(caseResult?.launchFailures).toHaveLength(1);
+    expect(caseResult?.launchFailures[0]?.launchError).toBe(LAUNCH_ERROR);
+    expect(caseResult?.launchFailures[0]?.hook.command).toBe(process.execPath);
+  });
+
+  it("the same run exits 0 under --ci", async () => {
+    setUpTwoLayers(EXIT0_SILENT, EXIT2_STDERR);
+    const spawner = new FakeSpawner(
+      new Map([
+        [EXIT0_SILENT, { exitCode: -1, launchError: LAUNCH_ERROR }],
+        [EXIT2_STDERR, { exitCode: 2, stderr: "blocked by policy\n" }],
+      ]),
+    );
+    const fp = fixturePath({ decision: "deny" });
+
+    const result = await runCli(
+      ["test", fp, "--claude-version", "2.1.300", "--yes", "--ci"],
+      "hookassert",
+      testDeps({ cwd: launchFailureProjectDir, home: launchFailureHomeDir, spawner }),
+    );
+
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("pretty prints the launch failure on the passing case's own line", async () => {
+    setUpTwoLayers(EXIT0_SILENT, EXIT2_STDERR);
+    const spawner = new FakeSpawner(
+      new Map([
+        [EXIT0_SILENT, { exitCode: -1, launchError: LAUNCH_ERROR }],
+        [EXIT2_STDERR, { exitCode: 2, stderr: "blocked by policy\n" }],
+      ]),
+    );
+    const fp = fixturePath({ decision: "deny" });
+
+    const pretty = await runCli(
+      ["test", fp, "--claude-version", "2.1.300", "--yes"],
+      "hookassert",
+      testDeps({ cwd: launchFailureProjectDir, home: launchFailureHomeDir, spawner }),
+    );
+
+    const line = pretty.stdout.split("\n").find((l) => l.startsWith("PASS"));
+    expect(line).toBeDefined();
+    expect(line).toContain(`hook never launched: ${LAUNCH_ERROR}`);
+    expect(line).toContain(`command "${process.execPath}"`);
+    expect(line).toMatch(/settings\.json:\d+\)/);
+  });
+
+  it("github annotates a passing case's launch failure as a warning", async () => {
+    setUpTwoLayers(EXIT0_SILENT, EXIT2_STDERR);
+    const spawner = new FakeSpawner(
+      new Map([
+        [EXIT0_SILENT, { exitCode: -1, launchError: LAUNCH_ERROR }],
+        [EXIT2_STDERR, { exitCode: 2, stderr: "blocked by policy\n" }],
+      ]),
+    );
+    const fp = fixturePath({ decision: "deny" });
+
+    const github = await runCli(
+      ["test", fp, "--claude-version", "2.1.300", "--yes", "--format", "github"],
+      "hookassert",
+      testDeps({ cwd: launchFailureProjectDir, home: launchFailureHomeDir, spawner }),
+    );
+
+    expect(github.stdout).toMatch(/::warning file=.*,line=\d+,title=test case #0/);
+    expect(github.stdout).toContain(LAUNCH_ERROR);
+    expect(github.stdout).not.toContain("::error");
+  });
+
+  it("a deciding hook's launch failure and another hook's expectation diff are both printed", async () => {
+    // The user-layer hook never launches and wins the fold ("error"
+    // outranks "pass"); the project-layer hook exits 0 printing nothing,
+    // and the fixture expects stdout it never produced.
+    setUpTwoLayers(EXIT2_STDERR, EXIT0_SILENT);
+    const spawner = new FakeSpawner(
+      new Map([[EXIT2_STDERR, { exitCode: -1, launchError: LAUNCH_ERROR }]]),
+      { exitCode: 0 },
+    );
+    const fp = fixturePath({ stdoutContains: "marker" });
+
+    const pretty = await runCli(
+      ["test", fp, "--claude-version", "2.1.300", "--yes"],
+      "hookassert",
+      testDeps({ cwd: launchFailureProjectDir, home: launchFailureHomeDir, spawner }),
+    );
+
+    expect(pretty.stdout).toContain("FAIL");
+    expect(pretty.stdout).toContain(`hook never launched: ${LAUNCH_ERROR}`);
+    expect(pretty.stdout).toContain("stdoutContains:");
+    expect(pretty.stdout).not.toContain("decided by");
+  });
+
+  it("two hooks that never launch are both reported, in firing order", async () => {
+    setUpTwoLayers(EXIT0_SILENT, EXIT2_STDERR);
+    const spawner = new FakeSpawner(
+      new Map([
+        [EXIT0_SILENT, { exitCode: -1, launchError: "spawn user-hook ENOENT" }],
+        [EXIT2_STDERR, { exitCode: -1, launchError: "spawn project-hook ENOENT" }],
+      ]),
+    );
+    const fp = fixturePath({ decision: "error" });
+
+    const result = await runCli(
+      ["test", fp, "--claude-version", "2.1.300", "--yes", "--format", "json"],
+      "hookassert",
+      testDeps({ cwd: launchFailureProjectDir, home: launchFailureHomeDir, spawner }),
+    );
+
+    const report = parseJsonReport(result.stdout);
+    const caseResult = report.cases[0];
+    expect(caseResult?.launchFailures).toHaveLength(2);
+    // Firing order is the settings merge order: user layer, then project.
+    expect(caseResult?.launchFailures.map((f) => f.launchError)).toEqual([
+      "spawn user-hook ENOENT",
+      "spawn project-hook ENOENT",
+    ]);
+  });
+
+  it("a case where nothing fired carries no launch failures", async () => {
+    setUpTwoLayers(EXIT0_SILENT, EXIT2_STDERR);
+    const filePath = path.join(launchFailureProjectDir, "no-fire.yaml");
+    writeFileSync(
+      filePath,
+      JSON.stringify(
+        { cases: [{ event: "SessionStart", expect: { fires: true } }] },
+        null,
+        2,
+      ),
+    );
+
+    const result = await runCli(
+      ["test", filePath, "--claude-version", "2.1.300", "--yes", "--format", "json"],
+      "hookassert",
+      testDeps({
+        cwd: launchFailureProjectDir,
+        home: launchFailureHomeDir,
+        spawner: new FakeSpawner(),
+      }),
+    );
+
+    const report = parseJsonReport(result.stdout);
+    const caseResult = report.cases[0];
+    expect(caseResult?.launchFailures).toEqual([]);
+    expect(caseResult?.result.kind).toBe("fail");
+    const pretty = await runCli(
+      ["test", filePath, "--claude-version", "2.1.300", "--yes"],
+      "hookassert",
+      testDeps({
+        cwd: launchFailureProjectDir,
+        home: launchFailureHomeDir,
+        spawner: new FakeSpawner(),
+      }),
+    );
+    expect(pretty.stdout).toContain("no hook is declared under SessionStart");
+    expect(pretty.stdout).not.toContain("hook never launched");
+  });
+
+  it("a stubbed hook contributes no launch failure", async () => {
+    // Both layers declare the same command (`process.execPath`), so one
+    // stub entry keyed by command covers both hooks: neither reaches the
+    // spawner, and a stub's outcome can never carry a `launchError` (see
+    // `executor.ts`'s `stubbedOutcome`) — this proves the report reflects
+    // that rather than merely relying on it.
+    setUpTwoLayers(EXIT0_SILENT, EXIT2_STDERR);
+    const fp = path.join(launchFailureProjectDir, "stub.yaml");
+    writeFileSync(
+      fp,
+      JSON.stringify(
+        {
+          cases: [
+            {
+              event: "PreToolUse",
+              tool: "Bash",
+              stub: { [process.execPath]: { exitCode: 0 } },
+              expect: { fires: true },
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    );
+
+    const spawner = new FakeSpawner();
+    const result = await runCli(
+      ["test", fp, "--claude-version", "2.1.300", "--yes", "--format", "json"],
+      "hookassert",
+      testDeps({ cwd: launchFailureProjectDir, home: launchFailureHomeDir, spawner }),
+    );
+
+    expect(spawner.calls).toHaveLength(0);
+    const report = parseJsonReport(result.stdout);
+    expect(report.cases[0]?.launchFailures).toEqual([]);
+  });
+});
+
+describe("an unknown case that also carries a launch failure", () => {
+  // `Notification` has no entry in `MINIMAL_SPEC_PATH`'s spec, so every hook
+  // that fires for it resolves to an "unknown" Decision (event-not-in-spec)
+  // regardless of whether its process ever launched — the scenario
+  // `caseAnnotation`'s launch-failure warning branch dropped every
+  // `UnknownReason` for by treating an "unknown" result like a "pass".
+  let unknownProjectDir: string;
+  let unknownHomeDir: string;
+
+  afterEach(() => {
+    rmSync(unknownProjectDir, { recursive: true, force: true });
+    rmSync(unknownHomeDir, { recursive: true, force: true });
+  });
+
+  function notificationSettings(script: string): unknown {
+    return {
+      hooks: {
+        Notification: [
+          { hooks: [{ type: "command", command: process.execPath, args: [script] }] },
+        ],
+      },
+    };
+  }
+
+  function setUpOneLayer(script: string): void {
+    unknownProjectDir = mkdtempSync(
+      path.join(tmpdir(), "hookassert-unknown-launch-project-"),
+    );
+    unknownHomeDir = path.join(unknownProjectDir, "no-such-home");
+    mkdirSync(path.join(unknownProjectDir, ".claude"), { recursive: true });
+    writeFileSync(
+      path.join(unknownProjectDir, ".claude", "settings.json"),
+      JSON.stringify(notificationSettings(script), null, 2),
+    );
+  }
+
+  function setUpTwoLayers(userScript: string, projectScript: string): void {
+    unknownProjectDir = mkdtempSync(
+      path.join(tmpdir(), "hookassert-unknown-launch-project-"),
+    );
+    unknownHomeDir = mkdtempSync(
+      path.join(tmpdir(), "hookassert-unknown-launch-home-"),
+    );
+    mkdirSync(path.join(unknownProjectDir, ".claude"), { recursive: true });
+    mkdirSync(path.join(unknownHomeDir, ".claude"), { recursive: true });
+    writeFileSync(
+      path.join(unknownHomeDir, ".claude", "settings.json"),
+      JSON.stringify(notificationSettings(userScript), null, 2),
+    );
+    writeFileSync(
+      path.join(unknownProjectDir, ".claude", "settings.json"),
+      JSON.stringify(notificationSettings(projectScript), null, 2),
+    );
+  }
+
+  function fixturePath(): string {
+    const filePath = path.join(unknownProjectDir, "fixture.yaml");
+    writeFileSync(
+      filePath,
+      JSON.stringify({ cases: [{ event: "Notification", expect: {} }] }, null, 2),
+    );
+    return filePath;
+  }
+
+  const LAUNCH_ERROR = "spawn notify-hook ENOENT";
+
+  it("pretty states both the launch failure and the unknown reason on the UNKNOWN line", async () => {
+    setUpOneLayer(EXIT0_SILENT);
+    const spawner = new FakeSpawner(
+      new Map([[EXIT0_SILENT, { exitCode: -1, launchError: LAUNCH_ERROR }]]),
+    );
+    const fp = fixturePath();
+
+    const pretty = await runCli(
+      ["test", fp, "--claude-version", "2.1.300", "--yes"],
+      "hookassert",
+      testDeps({ cwd: unknownProjectDir, home: unknownHomeDir, spawner }),
+    );
+
+    const line = pretty.stdout.split("\n").find((l) => l.startsWith("UNKNOWN"));
+    expect(line).toBeDefined();
+    expect(line).toContain(`hook never launched: ${LAUNCH_ERROR}`);
+    expect(line).toContain("has no entry in the loaded spec");
+  });
+
+  it("github states both the launch failure and the unknown reason in one ::warning, never ::error", async () => {
+    setUpOneLayer(EXIT0_SILENT);
+    const spawner = new FakeSpawner(
+      new Map([[EXIT0_SILENT, { exitCode: -1, launchError: LAUNCH_ERROR }]]),
+    );
+    const fp = fixturePath();
+
+    const github = await runCli(
+      ["test", fp, "--claude-version", "2.1.300", "--yes", "--format", "github"],
+      "hookassert",
+      testDeps({ cwd: unknownProjectDir, home: unknownHomeDir, spawner }),
+    );
+
+    expect(github.stdout).toMatch(/::warning file=.*,line=\d+,title=test case #0/);
+    expect(github.stdout).toContain(LAUNCH_ERROR);
+    expect(github.stdout).toContain("has no entry in the loaded spec");
+    expect(github.stdout).not.toContain("::error");
+  });
+
+  it("a multi-hook UNKNOWN case whose deciding hook never launched still attributes the hook exactly once (issue #64 regression)", async () => {
+    // The user-layer hook fires first and never launches; the project-layer
+    // hook fires second and runs normally. Both resolve "unknown"
+    // (event-not-in-spec), so the tie is broken by firing order
+    // (`combineDecisions`) and the launch-failed user-layer hook becomes
+    // `decidedBy` — the same hook `describeLaunchFailures` already names, so
+    // `decidedBySuffix` must not also append "— decided by …" for it.
+    setUpTwoLayers(EXIT0_SILENT, EXIT2_STDERR);
+    const spawner = new FakeSpawner(
+      new Map([[EXIT0_SILENT, { exitCode: -1, launchError: LAUNCH_ERROR }]]),
+      { exitCode: 0 },
+    );
+    const fp = fixturePath();
+
+    const pretty = await runCli(
+      ["test", fp, "--claude-version", "2.1.300", "--yes"],
+      "hookassert",
+      testDeps({ cwd: unknownProjectDir, home: unknownHomeDir, spawner }),
+    );
+
+    const line = pretty.stdout.split("\n").find((l) => l.startsWith("UNKNOWN"));
+    expect(line).toBeDefined();
+    expect(line).toContain(`hook never launched: ${LAUNCH_ERROR}`);
+    expect(line).toContain(`command "${process.execPath}"`);
+    expect(line).not.toContain("decided by");
+    const attributions = line?.match(/settings\.json:\d+/g) ?? [];
+    expect(attributions).toHaveLength(1);
   });
 });
 

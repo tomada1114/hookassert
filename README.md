@@ -136,16 +136,22 @@ hookassert --help
   still wins over it), a repeatable `--env <NAME>` opts one ambient environment variable
   into every spawned hook's environment by name — a value is never accepted here, only a
   name — and `--concurrency <n>` runs at most n hooks at once (default 8; use 1 for
-  hooks that must not overlap). The interactive consent prompt names the cap it will run
-  under (`up to 8 at a time`, or `one at a time` under `--concurrency 1`). When several
-  hooks fire for one case, any deny wins; the report names the hook that decided. A hook
-  whose process never starts at all — an exec-form hook (one declaring `args`) naming a
-  command that does not exist, a missing interpreter — resolves to `decision: error`
-  (`cause: launch-failed`) rather than being mistaken for a hook that ran and exited
-  non-zero. A failing case's `pretty` and `github` output then shows the OS-reported
-  reason (`spawn python33 ENOENT`, say) alongside the hook's own declaration, and the
-  JSON report carries it as `decidedBy.launchError`. A shell-form hook (no `args`, the
-  shape Claude Code's own docs show) always launches `/bin/sh` successfully, so a typo'd
+  hooks that must not overlap). The interactive consent prompt names how many will
+  actually run under (`up to 8 at a time`, or `one at a time` under `--concurrency 1`).
+  When several hooks fire for one case, any deny wins; the report names the hook that
+  decided. A hook whose process never starts at all — an exec-form hook (one declaring
+  `args`) naming a command that does not exist, a missing interpreter — resolves to
+  `decision: error` (`cause: launch-failed`) rather than being mistaken for a hook that
+  ran and exited non-zero. Every hook that fired for a case and never launched is
+  surfaced, not only the one whose decision decided the case's verdict: `pretty` and
+  `github` show the OS-reported reason (`spawn python33 ENOENT`, say) alongside the
+  hook's own declaration on the case's own PASS/UNKNOWN/FAIL line, whichever that case's
+  verdict turned out to be — `github` emits an error annotation for a failing case and a
+  warning annotation for a passing or unknown one, since neither of those verdicts is
+  itself a failure. The JSON report carries every launch failure for the case as
+  `launchFailures[]`, including the deciding hook's own, which duplicates what
+  `decidedBy.launchError` already reports. A shell-form hook (no `args`, the shape
+  Claude Code's own docs show) always launches `/bin/sh` successfully, so a typo'd
   `command` there is reported by the shell itself — usually exit `127` — not as
   `launch-failed`. Exits `0` when every case passes (and, with `--ci`, none is `unknown`
   either), `1` when at least one fails, and `3` when there are no failures but `--ci`

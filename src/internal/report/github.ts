@@ -33,6 +33,12 @@ export interface ReportFinding {
   readonly title: string;
   /** Human-readable explanation, shown as the annotation body. */
   readonly message: string;
+  /**
+   * The workflow-command level this finding renders as. Omit to take the
+   * default, `"error"` — every finding before `test` gained something to
+   * annotate that is not itself a failed verdict.
+   */
+  readonly level?: "error" | "warning";
 }
 
 /**
@@ -84,17 +90,19 @@ function escapeData(value: string): string {
 }
 
 /**
- * Render one {@link ReportFinding} as a single GitHub Actions `::error`
- * workflow command, in the form
- * `::error file=<settings file>,line=<line>,title=<rule or case>::<message>`.
+ * Render one {@link ReportFinding} as a single GitHub Actions workflow
+ * command, in the form
+ * `::<level> file=<settings file>,line=<line>,title=<rule or case>::<message>`
+ * — `<level>` is {@link ReportFinding.level}, defaulting to `"error"`.
  */
 export function renderGithubFinding(
   finding: ReportFinding,
   workspaceRoot: string,
 ): string {
+  const level = finding.level ?? "error";
   const file = escapeProperty(relativizeForGithub(finding.file, workspaceRoot));
   const title = escapeProperty(finding.title);
-  return `::error file=${file},line=${String(finding.line)},title=${title}::${escapeData(finding.message)}`;
+  return `::${level} file=${file},line=${String(finding.line)},title=${title}::${escapeData(finding.message)}`;
 }
 
 /**

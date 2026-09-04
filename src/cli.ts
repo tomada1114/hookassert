@@ -68,6 +68,7 @@ import {
   renderTestJson,
   renderTestPretty,
   type ExplainReport,
+  type LaunchFailure,
   type LintReport,
   type TestCaseReport,
   type TestReport,
@@ -1378,6 +1379,16 @@ async function runTest(args: readonly string[], deps: CliDeps): Promise<CliResul
     };
     const result = assertCase(p.caseData, observation);
     caseResults.push(result);
+    // Every firing hook whose process never started at all, in firing
+    // order — including the deciding hook when it is one of them. `assertCase`
+    // already folds every firing hook's `Decision` into the one verdict
+    // above; this is a separate, reporter-only projection so a launch
+    // failure that loses that fold is still surfaced (#65).
+    const launchFailures = fired.flatMap<LaunchFailure>((f) =>
+      f.execOutcome.launchError === undefined
+        ? []
+        : [{ hook: f.hook, launchError: f.execOutcome.launchError }],
+    );
     caseReports.push({
       file: p.fixturePath,
       index: p.index,
@@ -1385,6 +1396,7 @@ async function runTest(args: readonly string[], deps: CliDeps): Promise<CliResul
       tool: p.caseData.tool,
       result,
       firedCount: fired.length,
+      launchFailures,
     });
   }
 
