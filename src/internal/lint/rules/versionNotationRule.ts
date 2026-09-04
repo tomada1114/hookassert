@@ -24,7 +24,10 @@
  * *anything* about the spec it is checked against, not only the notation
  * rules this module gates, so this mirrors that rather than trusting
  * `meetsSinceVersion` on a version the loaded spec was never declared to
- * describe.
+ * describe. Its own message names the declared range instead of reusing the
+ * undetermined wording, since the version here *was* determined — only
+ * `spec.claudeCodeRange` fails to cover it — and saying otherwise would
+ * contradict the `--claude-version` the caller just passed.
  */
 
 import { isInDeclaredRange, meetsSinceVersion } from "../../spec/index.js";
@@ -110,14 +113,25 @@ export function createVersionNotationRule(
           continue;
         }
 
-        const message =
-          ctx.versionContext.kind === "undetermined" || isOutOfRange
-            ? `Matcher "${matcher}" uses ${notationLabel}, supported since Claude ` +
-              `Code ${rule.sinceVersion}, but the running Claude Code version could ` +
-              "not be determined — this notation might not be supported."
-            : `Matcher "${matcher}" uses ${notationLabel}, which requires Claude ` +
-              `Code >= ${rule.sinceVersion}, but the detected version is ` +
-              `${formatKnownVersion(ctx.versionContext)}.`;
+        let message: string;
+        if (ctx.versionContext.kind === "known" && isOutOfRange) {
+          message =
+            `Matcher "${matcher}" uses ${notationLabel}, supported since Claude ` +
+            `Code ${rule.sinceVersion}, but the detected Claude Code version ` +
+            `${formatKnownVersion(ctx.versionContext)} is outside the range this spec ` +
+            `describes (\`${ctx.spec.claudeCodeRange}\`), so support for this notation ` +
+            "cannot be confirmed.";
+        } else if (ctx.versionContext.kind === "undetermined") {
+          message =
+            `Matcher "${matcher}" uses ${notationLabel}, supported since Claude ` +
+            `Code ${rule.sinceVersion}, but the running Claude Code version could ` +
+            "not be determined — this notation might not be supported.";
+        } else {
+          message =
+            `Matcher "${matcher}" uses ${notationLabel}, which requires Claude ` +
+            `Code >= ${rule.sinceVersion}, but the detected version is ` +
+            `${formatKnownVersion(ctx.versionContext)}.`;
+        }
 
         findings.push({
           file: group.file,
