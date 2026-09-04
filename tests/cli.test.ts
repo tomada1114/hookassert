@@ -113,18 +113,47 @@ describe("runCli help", () => {
   });
 
   it("prefers help over dispatch when a command is also given", async () => {
-    // `hookassert explain --help` asks about `explain`; until explain exists,
-    // the general usage text is the honest answer, and it must not be an error.
+    // `hookassert explain --help` asks about `explain`, not about running it,
+    // so it must print explain's own usage rather than dispatching.
     const result = await runCli(["explain", "--help"]);
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe("");
+    expect(result.stdout).toContain(
+      "Usage: hookassert explain <event> [tool] [options]",
+    );
   });
 
-  it("the global usage text mentions --concurrency", async () => {
-    const result = await runCli(["test", "--help"]);
+  it.each(SUBCOMMANDS)(
+    "%s --help prints that subcommand's own usage line, not the global one",
+    async (name) => {
+      const result = await runCli([name, "--help"], "my-tool");
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toContain(`Usage: my-tool ${name} `);
+      expect(result.stdout).not.toContain("Usage: my-tool <command> [options]");
+    },
+  );
+
+  it.each(SUBCOMMANDS)("%s -h prints that subcommand's own usage", async (name) => {
+    const result = await runCli([name, "-h"], "my-tool");
     expect(result.exitCode).toBe(0);
-    expect(result.stderr).toBe("");
-    expect(result.stdout).toContain("--concurrency");
+    expect(result.stdout).toContain(`Usage: my-tool ${name} `);
+  });
+
+  it("test --help mentions a test-only option that lint --help does not", async () => {
+    // The two subcommands share `--settings`/`--claude-version`/`--format`,
+    // so this only pins per-subcommand help if it names something that
+    // could not have come from the global usage text or from `lint`'s own.
+    const testHelp = (await runCli(["test", "--help"])).stdout;
+    const lintHelp = (await runCli(["lint", "--help"])).stdout;
+    expect(testHelp).toContain("--concurrency");
+    expect(lintHelp).not.toContain("--concurrency");
+  });
+
+  it("lint --help does not list a test-only option, and vice versa", async () => {
+    const lintHelp = (await runCli(["lint", "--help"])).stdout;
+    expect(lintHelp).not.toContain("--dry-run");
+    expect(lintHelp).not.toContain("--timeout");
   });
 
   it("exits 0 with the usage text when given no arguments", async () => {

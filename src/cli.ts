@@ -121,7 +121,7 @@ const COMMANDS = [
   ["explain", "Show which hooks a tool event fires, and why."],
   ["lint", "Check hook declarations for matcher and command mistakes."],
   ["record", "Capture real hook payloads from a Claude Code session."],
-  ["test", "Replay recorded events and assert on hook behavior [--concurrency <n>]."],
+  ["test", "Replay recorded events and assert on hook behavior."],
 ] as const;
 
 type Subcommand = (typeof COMMANDS)[number][0];
@@ -195,6 +195,134 @@ function usage(executable: string): string {
     `Commands:\n${commands}\n` +
     "Options:\n" +
     "  -h, --help  Show this help message.\n"
+  );
+}
+
+/**
+ * One subcommand's own `--help` text: its usage line, one-line summary, and
+ * the options it actually accepts.
+ *
+ * @remarks
+ * `options` names only what an operator can pass — never `help` itself,
+ * which every subcommand accepts as a boolean but none of the four
+ * `..._OPTIONS` tables need to declare any more (see {@link subcommandUsage},
+ * which appends the same fixed `-h, --help` row {@link usage} prints).
+ * Kept as a plain object literal next to the table it describes rather than
+ * derived from `..._OPTIONS`'s keys, because the flag text and description
+ * a human reads (`--settings <file>` repeatable, say) carry more than a
+ * `parseArgs` option shape can express.
+ */
+interface SubcommandHelp {
+  /** Positional/option summary shown after `Usage: <executable> <name>`. */
+  readonly usageArgs: string;
+  /** One-line synopsis, printed under the usage line. */
+  readonly summary: string;
+  /** `[flag text, description]` pairs, in the order they should print. */
+  readonly options: readonly (readonly [string, string])[];
+}
+
+/**
+ * Every subcommand's own help text, keyed by {@link Subcommand}.
+ *
+ * @remarks
+ * Enumerates each of `explain`/`lint`/`record`/`test`'s real options against
+ * its own `..._OPTIONS` table (`EXPLAIN_OPTIONS`, `LINT_OPTIONS`,
+ * `RECORD_OPTIONS`, `TEST_OPTIONS`) — never a superset borrowed from another
+ * subcommand, so `lint --help` cannot list an option only `test` accepts.
+ */
+const SUBCOMMAND_HELP: Readonly<Record<Subcommand, SubcommandHelp>> = {
+  explain: {
+    usageArgs: "<event> [tool] [options]",
+    summary: "Show which hooks a tool event fires, and why.",
+    options: [
+      ["--settings <file>", "Load hook declarations from this file (repeatable)."],
+      [
+        "--claude-version <ver>",
+        "Assume this Claude Code version instead of HOOKASSERT_CLAUDE_VERSION.",
+      ],
+      ["--format <fmt>", "Output format: pretty, json, or github (default: pretty)."],
+      [
+        "--emit-fixtures <dir>",
+        "Write one fixture per captured payload into <dir>, instead of matching hooks.",
+      ],
+      [
+        "--capture-dir <dir>",
+        "Read captured payloads from this directory (with --emit-fixtures).",
+      ],
+    ],
+  },
+  lint: {
+    usageArgs: "[options]",
+    summary: "Check hook declarations for matcher and command mistakes.",
+    options: [
+      ["--settings <file>", "Load hook declarations from this file (repeatable)."],
+      [
+        "--claude-version <ver>",
+        "Assume this Claude Code version instead of HOOKASSERT_CLAUDE_VERSION.",
+      ],
+      ["--format <fmt>", "Output format: pretty, json, or github (default: pretty)."],
+      ["--ci", "Accepted for symmetry with test; behaves the same as a plain run."],
+    ],
+  },
+  record: {
+    usageArgs: "[options]",
+    summary: "Capture real hook payloads from a Claude Code session.",
+    options: [
+      ["--stop", "Stop the active recording session and restore the settings file."],
+      [
+        "--events <list>",
+        "Comma-separated events to capture (default: every documented event).",
+      ],
+      ["--capture-dir <dir>", "Write captured payload envelopes into this directory."],
+      ["--claude-version <ver>", "Version baked into the generated capture script."],
+    ],
+  },
+  test: {
+    usageArgs: "<fixture>... [options]",
+    summary: "Replay recorded events and assert on hook behavior.",
+    options: [
+      ["--settings <file>", "Load hook declarations from this file (repeatable)."],
+      [
+        "--claude-version <ver>",
+        "Assume this Claude Code version instead of HOOKASSERT_CLAUDE_VERSION.",
+      ],
+      ["--format <fmt>", "Output format: pretty, json, or github (default: pretty)."],
+      ["--yes", "Skip the interactive consent prompt."],
+      ["--ci", "Skip the prompt and fail on an unknown case instead of passing it."],
+      ["--dry-run", "Resolve and report without spawning any hook."],
+      ["--timeout <ms>", "Default hook timeout, for hooks that declare none."],
+      ["--concurrency <n>", "Run at most n hooks at once (default: 8)."],
+      [
+        "--env <name>",
+        "Forward this ambient environment variable's name to spawned hooks (repeatable).",
+      ],
+    ],
+  },
+};
+
+/**
+ * Render one subcommand's own `--help` text, the same `padEnd`-aligned
+ * layout {@link usage} renders the global commands list with.
+ *
+ * @remarks
+ * Called only from `runCli`'s dispatch, once `--help`/`-h` is known to be
+ * present alongside a recognized {@link Subcommand} — see the design note on
+ * `runCli` for why that check happens on the raw `argv` rather than after
+ * each subcommand's own `parseArgs` call.
+ */
+function subcommandUsage(executable: string, name: Subcommand): string {
+  const help = SUBCOMMAND_HELP[name];
+  const helpFlag = "-h, --help";
+  const width = Math.max(helpFlag.length, ...help.options.map(([flag]) => flag.length));
+  const options = help.options
+    .map(([flag, description]) => `  ${flag.padEnd(width)}  ${description}\n`)
+    .join("");
+  return (
+    `Usage: ${executable} ${name} ${help.usageArgs}\n\n` +
+    `${help.summary}\n\n` +
+    "Options:\n" +
+    options +
+    `  ${helpFlag.padEnd(width)}  Show this help message.\n`
   );
 }
 
@@ -365,7 +493,6 @@ const EXPLAIN_OPTIONS = {
   format: { type: "string" },
   "emit-fixtures": { type: "string" },
   "capture-dir": { type: "string" },
-  help: { type: "boolean", short: "h" },
 } as const;
 
 /**
@@ -557,7 +684,6 @@ const LINT_OPTIONS = {
   "claude-version": { type: "string" },
   format: { type: "string" },
   ci: { type: "boolean" },
-  help: { type: "boolean", short: "h" },
 } as const;
 
 /**
@@ -653,7 +779,6 @@ const RECORD_OPTIONS = {
   events: { type: "string" },
   "capture-dir": { type: "string" },
   "claude-version": { type: "string" },
-  help: { type: "boolean", short: "h" },
 } as const;
 
 /**
@@ -806,7 +931,6 @@ const TEST_OPTIONS = {
   timeout: { type: "string" },
   concurrency: { type: "string" },
   env: { type: "string", multiple: true },
-  help: { type: "boolean", short: "h" },
 } as const;
 
 /**
@@ -1457,7 +1581,18 @@ export async function runCli(
   deps: Partial<CliDeps> = {},
 ): Promise<CliResult> {
   const [subcommand] = argv;
-  if (subcommand === undefined || argv.includes("--help") || argv.includes("-h")) {
+  const helpRequested = argv.includes("--help") || argv.includes("-h");
+
+  // Checked on the raw argv, before any subcommand-specific parseArgs call:
+  // `hookassert <subcommand> --help` must print that subcommand's own usage
+  // even though its own `..._OPTIONS` table no longer declares `help` at
+  // all (see the four tables above) — the check has to happen here, or not
+  // at all.
+  if (subcommand !== undefined && isSubcommand(subcommand) && helpRequested) {
+    return { exitCode: 0, stdout: subcommandUsage(executable, subcommand), stderr: "" };
+  }
+
+  if (subcommand === undefined || helpRequested) {
     return { exitCode: 0, stdout: usage(executable), stderr: "" };
   }
 
