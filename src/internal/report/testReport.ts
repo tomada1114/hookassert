@@ -587,14 +587,35 @@ interface CaseAnnotation {
 }
 
 /**
+ * The `{ file, line }` a launch-failure-driven annotation points at: the
+ * failing hook's own `Provenance` when it resolves inside the workspace,
+ * otherwise line 1 of the fixture file — the same fallback the `"fail"`
+ * branch below uses, for the reason given in this function's own remarks.
+ */
+function launchFailureLocation(
+  failure: LaunchFailure,
+  caseReport: TestCaseReport,
+  workspaceRoot: string,
+): { readonly file: string; readonly line: number } {
+  const attachable = attachesInWorkspace(failure.hook.provenance.file, workspaceRoot);
+  return attachable
+    ? { file: failure.hook.provenance.file, line: failure.hook.provenance.line }
+    : { file: caseReport.file, line: 1 };
+}
+
+/**
  * Decide the `github` annotation for one {@link TestCaseReport}, or
  * `undefined` for a case that gets no annotation at all: an `::error` for a
- * `"fail"` verdict, an `::warning` for a non-`"fail"` case that still carries
- * a launch failure (some other firing hook's own `Decision` outranked the
- * launch-failed one, so `assertCase`'s fold never saw it), otherwise none.
- * `::error` is deliberately never used for a passing case: the run's exit
- * code is `0` there, and a red annotation on a green run would report a
- * failure the verdict did not reach.
+ * `"fail"` verdict; an `::warning` for an `"unknown"` verdict that carries a
+ * launch failure, stating both why the case is `"unknown"` and which hook
+ * never launched (an `"unknown"` case without a launch failure gets none,
+ * matching how `"unknown"` was reported before this function existed);
+ * an `::warning` for a `"pass"` case that still carries a launch failure
+ * (some other firing hook's own `Decision` outranked the launch-failed one,
+ * so `assertCase`'s fold never saw it); otherwise none. `::error` is
+ * deliberately never used for a `"pass"`/`"unknown"` case: neither verdict is
+ * itself a failed assertion, and a red annotation would report a failure the
+ * verdict did not reach.
  *
  * @remarks
  * A fixture case carries no line number of its own the way a `ResolvedHook`
@@ -602,13 +623,14 @@ interface CaseAnnotation {
  * annotation points at line 1 of its fixture file, identified instead by the
  * case's own 0-based index and event/target in the annotation's title,
  * *unless* the annotation names a hook — the `"fail"` branch's `decidedBy`,
- * or the `"warning"` branch's first {@link TestCaseReport.launchFailures}
- * entry — in which case the annotation points at that hook's own
- * `Provenance` instead, the more actionable location. A hook declared
- * outside the workspace (the user layer's `~/.claude/settings.json`, or the
- * enterprise layer's) is the exception: an annotation whose `file=` is not
- * inside `GITHUB_WORKSPACE` silently attaches to nothing, so the annotation
- * stays on the fixture — which is inside the checkout.
+ * or the `"unknown"`/`"pass"` branches' first
+ * {@link TestCaseReport.launchFailures} entry — in which case the annotation
+ * points at that hook's own `Provenance` instead, the more actionable
+ * location. A hook declared outside the workspace (the user layer's
+ * `~/.claude/settings.json`, or the enterprise layer's) is the exception: an
+ * annotation whose `file=` is not inside `GITHUB_WORKSPACE` silently attaches
+ * to nothing, so the annotation stays on the fixture — which is inside the
+ * checkout.
  */
 function caseAnnotation(
   caseReport: TestCaseReport,
@@ -635,23 +657,32 @@ function caseAnnotation(
     return { level: "error", location, message };
   }
 
+  if (result.kind === "unknown") {
+    const [firstLaunchFailure] = caseReport.launchFailures;
+    if (firstLaunchFailure === undefined) {
+      return undefined;
+    }
+    const message = [
+      ...describeLaunchFailures(caseReport),
+      ...result.reasons.map(describeUnknownReason),
+    ].join("; ");
+    return {
+      level: "warning",
+      location: launchFailureLocation(firstLaunchFailure, caseReport, workspaceRoot),
+      message,
+    };
+  }
+
+  if (result.kind !== "pass") {
+    return undefined;
+  }
   const [firstLaunchFailure] = caseReport.launchFailures;
   if (firstLaunchFailure === undefined) {
     return undefined;
   }
-  const attachable = attachesInWorkspace(
-    firstLaunchFailure.hook.provenance.file,
-    workspaceRoot,
-  );
-  const location = attachable
-    ? {
-        file: firstLaunchFailure.hook.provenance.file,
-        line: firstLaunchFailure.hook.provenance.line,
-      }
-    : { file: caseReport.file, line: 1 };
   return {
     level: "warning",
-    location,
+    location: launchFailureLocation(firstLaunchFailure, caseReport, workspaceRoot),
     message: describeLaunchFailures(caseReport).join("; "),
   };
 }
@@ -659,9 +690,8 @@ function caseAnnotation(
 /**
  * Render a {@link TestReport} as GitHub Actions workflow commands: the
  * leading header line, then one annotation per case {@link caseAnnotation}
- * decides needs one — an `::error` for every `"fail"` case, an `::warning`
- * for a non-`"fail"` case with a launch failure `assertCase`'s fold did not
- * pick.
+ * decides needs one — see that function for which verdicts get one and at
+ * what level.
  */
 export function renderTestGithub(report: TestReport, workspaceRoot: string): string {
   const lines: string[] = [renderGithubHeader(report.header)];
