@@ -6,7 +6,8 @@
  * @remarks
  * Static layer: reads a file's text and parses it, but never spawns a
  * process and never writes anything back — the same guarantee
- * `settings/load.ts` makes.
+ * `settings/load.ts` makes. This is not a second reader: it is a second
+ * *walk* over the same shared parse `settings/jsonc.ts` owns.
  *
  * `settings/load.ts`'s own `loadSourceHooks` cannot be reused here: it calls
  * `requireString` on every declared `matcher`, which throws
@@ -23,22 +24,25 @@
  * rejected exactly as `settings/load.ts` would reject it — this module is
  * not a general-purpose lenient settings reader, only the one exception
  * `matcher-is-array` needs. Every command entry (`hooks.<event>[].hooks[]`)
- * is read with the same strictness `settings/load.ts`'s own
- * `readCommandHooks` applies — no exception carved out there.
+ * is read with the same strictness `settings/jsonc.ts`'s `readCommandEntry`
+ * applies — no exception carved out there.
  */
 
-import { readFileSync } from "node:fs";
-
-import {
-  type Node,
-  type ParseError,
-  parseTree,
-  printParseErrorCode,
-} from "jsonc-parser";
+import type { Node } from "jsonc-parser";
 
 import type { EventName } from "../../types.js";
-import { SettingsParseError } from "../errors.js";
-import type { SettingsSource } from "../settings/index.js";
+import {
+  fail,
+  getProperty,
+  isEventName,
+  positionAt,
+  readCommandEntry,
+  readSettingsTree,
+  requireArray,
+  requireObject,
+  requireString,
+  type SettingsSource,
+} from "../settings/index.js";
 import type {
   LintContext,
   LintHookCommand,
@@ -47,151 +51,9 @@ import type {
 } from "./types.js";
 
 /**
- * The event names this reader recognizes — the same set
- * `settings/load.ts`'s own `KNOWN_EVENT_NAMES` mirrors from `EventName`.
- *
- * @remarks
- * Typed as `Record<EventName, true>` rather than an array so widening
- * `EventName` without extending this map is a type error here, instead of a
- * reader that quietly drops every group declared under the new event. A
- * `hooks` key outside this set is not an error — see `KNOWN_EVENT_NAMES`'s
- * own doc comment in `settings/load.ts` for why.
- */
-const KNOWN_EVENT_NAMES: Readonly<Record<EventName, true>> = {
-  SessionStart: true,
-  Setup: true,
-  InstructionsLoaded: true,
-  UserPromptSubmit: true,
-  UserPromptExpansion: true,
-  MessageDisplay: true,
-  PreToolUse: true,
-  PermissionRequest: true,
-  PostToolUse: true,
-  PostToolUseFailure: true,
-  PostToolBatch: true,
-  PermissionDenied: true,
-  Notification: true,
-  SubagentStart: true,
-  SubagentStop: true,
-  TaskCreated: true,
-  TaskCompleted: true,
-  Stop: true,
-  StopFailure: true,
-  TeammateIdle: true,
-  ConfigChange: true,
-  CwdChanged: true,
-  DirectoryAdded: true,
-  FileChanged: true,
-  WorktreeCreate: true,
-  WorktreeRemove: true,
-  PreCompact: true,
-  PostCompact: true,
-  PreModelSwitch: true,
-  PostModelSwitch: true,
-  SessionEnd: true,
-  Elicitation: true,
-  ElicitationResult: true,
-};
-
-function isEventName(value: string): value is EventName {
-  return Object.hasOwn(KNOWN_EVENT_NAMES, value);
-}
-
-/** Find a property node's *value* node inside an object node, by key. */
-function getProperty(objectNode: Node, key: string): Node | undefined {
-  for (const property of objectNode.children ?? []) {
-    const [keyNode, valueNode] = property.children ?? [];
-    if (keyNode?.type === "string" && keyNode.value === key) {
-      return valueNode;
-    }
-  }
-  return undefined;
-}
-
-/** 1-based line of a UTF-16 code-unit offset into `text`. */
-function lineAt(text: string, offset: number): number {
-  let line = 1;
-  for (let i = 0; i < offset; i++) {
-    if (text[i] === "\n") {
-      line++;
-    }
-  }
-  return line;
-}
-
-function describeParseErrors(errors: readonly ParseError[]): string {
-  return errors
-    .map(
-      (error) =>
-        `${printParseErrorCode(error.error)} at offset ${String(error.offset)}`,
-    )
-    .join(", ");
-}
-
-function fail(source: SettingsSource, reason: string): never {
-  throw new SettingsParseError(source.path, source.layer, reason);
-}
-
-function requireObject(
-  node: Node | undefined,
-  source: SettingsSource,
-  description: string,
-): Node {
-  if (node?.type !== "object") {
-    fail(source, `${description} must be an object`);
-  }
-  return node;
-}
-
-function requireArray(
-  node: Node | undefined,
-  source: SettingsSource,
-  description: string,
-): readonly Node[] {
-  if (node?.type !== "array") {
-    fail(source, `${description} must be an array`);
-  }
-  return node.children ?? [];
-}
-
-function requireString(
-  node: Node | undefined,
-  source: SettingsSource,
-  description: string,
-): string {
-  if (node?.type !== "string" || typeof node.value !== "string") {
-    fail(source, `${description} must be a string`);
-  }
-  return node.value;
-}
-
-function requireNonEmptyString(
-  node: Node | undefined,
-  source: SettingsSource,
-  description: string,
-): string {
-  const value = requireString(node, source, description);
-  if (value.length === 0) {
-    fail(source, `${description} must be a non-empty string`);
-  }
-  return value;
-}
-
-function readStringArray(
-  node: Node,
-  source: SettingsSource,
-  description: string,
-): readonly string[] {
-  const elements = requireArray(node, source, description);
-  return elements.map((element) =>
-    requireString(element, source, `every element of ${description}`),
-  );
-}
-
-/**
  * Read one group's `matcher` property tolerantly: `absent`, `string`, or
  * `array` never throw — anything else is still a structural error, exactly
- * as `settings/load.ts`'s `requireString` would reject it.
+ * as `settings/jsonc.ts`'s `requireString` would reject it.
  */
 function readMatcherValue(
   node: Node | undefined,
@@ -215,7 +77,7 @@ function readMatcherValue(
 
 /**
  * Read one group's own `hooks: [...]` command entries — the same shape
- * `settings/load.ts`'s `readCommandHooks` reads, minus the `timeoutMs`
+ * `settings/jsonc.ts`'s `readCommandEntry` reads, minus the `timeoutMs`
  * conversion and `dedupeKey` fields the command rules never need.
  */
 function readGroupCommands(
@@ -228,26 +90,13 @@ function readGroupCommands(
   const commandNodes = requireArray(commandsNode, source, `"hooks.${event}[].hooks"`);
 
   return commandNodes.map((hookNode) => {
-    requireObject(hookNode, source, `an entry of "hooks.${event}[].hooks"`);
-
-    const commandNode = getProperty(hookNode, "command");
-    const command = requireNonEmptyString(
-      commandNode,
-      source,
-      `"hooks.${event}[].hooks[].command"`,
-    );
-
-    const argsNode = getProperty(hookNode, "args");
-    const args =
-      argsNode === undefined
-        ? undefined
-        : readStringArray(argsNode, source, `"hooks.${event}[].hooks[].args"`);
+    const { command, args } = readCommandEntry(hookNode, event, source);
 
     return {
       file: source.path,
       layer: source.layer,
       event,
-      line: lineAt(text, hookNode.offset),
+      line: positionAt(text, hookNode.offset).line,
       command,
       args,
     } satisfies LintHookCommand;
@@ -259,33 +108,14 @@ function readGroupsAndCommands(source: SettingsSource): {
   readonly groups: readonly LintMatcherGroup[];
   readonly commands: readonly LintHookCommand[];
 } {
-  let text: string;
-  try {
-    text = readFileSync(source.path, "utf8");
-  } catch (error) {
-    if (
-      typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      error.code === "ENOENT"
-    ) {
-      return { groups: [], commands: [] };
-    }
-    throw error;
+  const settingsTree = readSettingsTree(source);
+  if (settingsTree === undefined) {
+    return { groups: [], commands: [] };
   }
-
-  const errors: ParseError[] = [];
-  const root = parseTree(text, errors, { allowTrailingComma: true });
-  if (errors.length > 0) {
-    fail(source, describeParseErrors(errors));
-  }
-  const rootNode = requireObject(root, source, "the settings file");
-
-  const hooksNode = getProperty(rootNode, "hooks");
+  const { text, hooksNode } = settingsTree;
   if (hooksNode === undefined) {
     return { groups: [], commands: [] };
   }
-  requireObject(hooksNode, source, '"hooks"');
 
   const groups: LintMatcherGroup[] = [];
   const commands: LintHookCommand[] = [];
@@ -294,7 +124,8 @@ function readGroupsAndCommands(source: SettingsSource): {
     const eventKey = requireString(keyNode, source, 'every key of "hooks"');
     if (!isEventName(eventKey)) {
       // Forward-compatible: an event this reader does not yet know about is
-      // skipped rather than rejected. See KNOWN_EVENT_NAMES's doc comment.
+      // skipped rather than rejected. See `settings/jsonc.ts`'s
+      // `isEventName` doc comment.
       continue;
     }
 
@@ -303,7 +134,7 @@ function readGroupsAndCommands(source: SettingsSource): {
       requireObject(groupNode, source, `an entry of "hooks.${eventKey}"`);
       const matcherNode = getProperty(groupNode, "matcher");
       const matcher = readMatcherValue(matcherNode, source, eventKey);
-      const line = lineAt(text, matcherNode?.offset ?? groupNode.offset);
+      const line = positionAt(text, matcherNode?.offset ?? groupNode.offset).line;
       groups.push({
         file: source.path,
         layer: source.layer,
