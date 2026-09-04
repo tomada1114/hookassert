@@ -120,12 +120,7 @@ const COMMANDS = [
   ["explain", "Show which hooks a tool event fires, and why."],
   ["lint", "Check hook declarations for matcher and command mistakes."],
   ["record", "Capture real hook payloads from a Claude Code session."],
-  [
-    "test",
-    "Replay recorded events and assert on what the hooks did. " +
-      "--concurrency <n>: run at most n hooks at once (default 8; use 1 for " +
-      "hooks that must not overlap).",
-  ],
+  ["test", "Replay recorded events and assert on hook behavior [--concurrency <n>]."],
 ] as const;
 
 type Subcommand = (typeof COMMANDS)[number][0];
@@ -1097,10 +1092,13 @@ function assertConsentReachable(isTTY: boolean, yes: boolean, ci: boolean): void
  * non-interactive invocation that lacked `--yes`/`--ci`, so a non-empty
  * `spawnWorthy` reaching here is always on a TTY.
  *
- * `concurrency` names the cap this run's commands will actually run under —
- * `--concurrency`'s value when given, else {@link HOOKASSERT_DEFAULT_CONCURRENCY}
- * — so a human approving a long command list knows whether they run one after
- * another or several at once before answering.
+ * `concurrency` is the configured cap — `--concurrency`'s value when given,
+ * else {@link HOOKASSERT_DEFAULT_CONCURRENCY} — but the prompt reports
+ * `Math.min(concurrency, spawnWorthy.length)`: the cap can never be reached
+ * by fewer commands than the cap allows, so naming the configured cap would
+ * overstate how parallel the run actually is. This is how a human approving
+ * a long command list knows whether they run one after another or several at
+ * once before answering.
  *
  * @throws {ConsentRequiredError} the interactive prompt was declined.
  */
@@ -1116,8 +1114,11 @@ async function gateConsent(
   }
 
   const commandList = spawnWorthy.map(describeStepForConsent).join("\n");
+  const achievableConcurrency = Math.min(concurrency, spawnWorthy.length);
   const concurrencyNote =
-    concurrency === 1 ? "one at a time" : `up to ${String(concurrency)} at a time`;
+    achievableConcurrency === 1
+      ? "one at a time"
+      : `up to ${String(achievableConcurrency)} at a time`;
   const prompt =
     `About to run ${String(spawnWorthy.length)} command(s), ${concurrencyNote}:\n` +
     commandList;

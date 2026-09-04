@@ -120,7 +120,7 @@ describe("runCli help", () => {
     expect(result.stderr).toBe("");
   });
 
-  it("--help for test mentions --concurrency", async () => {
+  it("the global usage text mentions --concurrency", async () => {
     const result = await runCli(["test", "--help"]);
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe("");

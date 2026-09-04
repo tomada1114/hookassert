@@ -728,7 +728,38 @@ describe("the consent gate", () => {
     expect(promptSeen).toContain(process.execPath);
   });
 
-  it("names the default cap in the prompt (up to 8 at a time)", async () => {
+  it("names the default cap in the prompt when there are more commands than the cap", async () => {
+    const spawner = new FakeSpawner();
+    const tools = ["Bash", "Write", "Edit"] as const;
+    const fixturePath = writeFixture({
+      // 9 spawn-worthy cases so the default cap of 8 is actually reachable —
+      // with fewer commands than the cap, `gateConsent` reports the smaller
+      // achievable concurrency instead (see the single-command test above).
+      cases: Array.from({ length: 9 }, (_, i) => ({
+        event: "PreToolUse",
+        tool: tools[i % tools.length],
+        expect: {},
+      })),
+    });
+    let promptSeen = "";
+
+    await runCli(
+      ["test", fixturePath, "--claude-version", "2.1.300"],
+      "hookassert",
+      testDeps({
+        spawner,
+        isTTY: true,
+        confirm: (prompt) => {
+          promptSeen = prompt;
+          return Promise.resolve(true);
+        },
+      }),
+    );
+
+    expect(promptSeen).toContain("About to run 9 command(s), up to 8 at a time:");
+  });
+
+  it("names the achievable concurrency in the prompt when it is below the cap", async () => {
     const spawner = new FakeSpawner();
     const fixturePath = singlePassingCaseFixture();
     let promptSeen = "";
@@ -746,7 +777,7 @@ describe("the consent gate", () => {
       }),
     );
 
-    expect(promptSeen).toContain("About to run 1 command(s), up to 8 at a time:");
+    expect(promptSeen).toContain("About to run 1 command(s), one at a time:");
   });
 
   it("names a --concurrency 1 cap in the prompt as one at a time", async () => {
@@ -947,7 +978,7 @@ describe("--concurrency", () => {
    * A `Spawner` whose calls stay pending until manually released one at a
    * time, and which records the maximum number of calls in flight at once —
    * the same shape as the `GatedSpawner` in the cross-file concurrency
-   * suite above, but releasing a single call rather than every pending one,
+   * suite below, but releasing a single call rather than every pending one,
    * so a test can prove a second call is never issued while the first is
    * still outstanding.
    */
