@@ -1,8 +1,18 @@
 {
   "name": "hookassert",
-  "version": "0.0.0",
-  "description": "Test your Claude Code hooks like code: replay tool events against your merged settings, run the matching hooks, and fail CI when one doesn't fire or doesn't block.",
-  "keywords": [],
+  "version": "0.1.0",
+  "description": "Test your Claude Code hooks like code: replay tool events against your merged settings, run the matching hooks, and fail CI when one doesn't fire, doesn't block, or exits in a way you didn't declare.",
+  "keywords": [
+    "claude-code",
+    "claude",
+    "hooks",
+    "testing",
+    "test",
+    "cli",
+    "ci",
+    "lint",
+    "fixtures"
+  ],
   "license": "MIT",
   "author": "tomada <tmasuyama1114@gmail.com>",
   "repository": {
